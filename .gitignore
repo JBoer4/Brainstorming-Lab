@@ -5,3 +5,12 @@ __pycache__/
 *.ipynb_checkpoints/
 .DS_Store
 data/
+notes.md
+server-data/
+node_modules/
+
+# Claude
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+.plans/
