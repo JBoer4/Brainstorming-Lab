@@ -5,4 +5,6 @@ services:
       - "3000:3000"
     volumes:
       - ./server-data:/app/server-data
+      - ./cert.pem:/app/cert.pem:ro
+      - ./key.pem:/app/key.pem:ro
     restart: unless-stopped

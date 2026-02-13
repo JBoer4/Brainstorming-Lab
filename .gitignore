@@ -8,6 +8,7 @@ data/
 notes.md
 server-data/
 node_modules/
+*.pem
 
 # Claude
 CLAUDE.md

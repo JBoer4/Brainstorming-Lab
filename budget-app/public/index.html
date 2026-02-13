@@ -12,6 +12,7 @@
   <h1>Budget App</h1>
   <input type="text" id="test" value="" placeholder="type something...">
   <p id="status">Loading...</p>
+  <p id="debug" style="color:#555;font-size:0.75rem;margin-top:0.5rem;"></p>
 
   <script>
     if ('serviceWorker' in navigator) {
@@ -66,8 +67,16 @@
           body: JSON.stringify(data)
         });
         if (res.ok) {
+          const synced = await res.json();
+          // Server may have kept its newer version
+          if (synced.kept === 'server') {
+            await localSet('data', synced.data);
+            input.value = synced.data.text;
+            status.textContent = 'Server had newer data';
+          } else {
+            status.textContent = 'Saved & synced';
+          }
           pendingSync = false;
-          status.textContent = 'Saved & synced';
           return true;
         }
       } catch {}
@@ -93,21 +102,38 @@
     // --- App ---
     const input = document.getElementById('test');
     const status = document.getElementById('status');
+    const debug = document.getElementById('debug');
 
     async function load() {
-      const serverData = await syncFromServer();
+      debug.textContent = 'v4 | ';
+
+      // Always load local first so there's never an empty screen
       const localData = await localGet('data');
+      debug.textContent += localData ? `local: "${localData.text}"` : 'local: empty';
 
-      const data = serverData || localData || { text: 'it works' };
-      input.value = data.text;
-      await localSet('data', data);
+      if (localData) {
+        input.value = localData.text;
+        status.textContent = 'Loaded local data';
+      }
 
+      // Then try to sync with server
+      const serverData = await syncFromServer();
       if (serverData) {
-        status.textContent = 'Synced with server';
+        if (!localData || serverData.updatedAt >= (localData.updatedAt || 0)) {
+          input.value = serverData.text;
+          await localSet('data', serverData);
+          status.textContent = 'Synced with server';
+        } else {
+          // Local is newer, push it
+          await syncToServer(localData);
+        }
       } else if (localData) {
         pendingSync = true;
         status.textContent = 'Offline — using local data';
       } else {
+        const defaultData = { text: 'it works', updatedAt: Date.now() };
+        input.value = defaultData.text;
+        await localSet('data', defaultData);
         status.textContent = 'Fresh start';
       }
     }
@@ -116,7 +142,7 @@
     input.addEventListener('input', () => {
       clearTimeout(saveTimeout);
       saveTimeout = setTimeout(async () => {
-        const data = { text: input.value };
+        const data = { text: input.value, updatedAt: Date.now() };
         await localSet('data', data);
         await syncToServer(data);
       }, 500);

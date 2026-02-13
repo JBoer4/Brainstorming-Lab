@@ -1,4 +1,5 @@
 const express = require('express');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
@@ -22,10 +23,28 @@ app.get('/api/data', (req, res) => {
 });
 
 app.put('/api/data', (req, res) => {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(req.body, null, 2));
-  res.json({ ok: true });
+  let existing = null;
+  try {
+    existing = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+  } catch {}
+
+  const incoming = req.body;
+
+  // If server has newer data, keep it and tell the client
+  if (existing && existing.updatedAt && incoming.updatedAt
+      && existing.updatedAt > incoming.updatedAt) {
+    return res.json({ ok: true, kept: 'server', data: existing });
+  }
+
+  fs.writeFileSync(DATA_FILE, JSON.stringify(incoming, null, 2));
+  res.json({ ok: true, kept: 'client' });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Budget app running at http://localhost:${PORT}`);
+const server = https.createServer({
+  cert: fs.readFileSync(path.join(__dirname, 'cert.pem')),
+  key: fs.readFileSync(path.join(__dirname, 'key.pem'))
+}, app);
+
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Budget app running at https://localhost:${PORT}`);
 });
