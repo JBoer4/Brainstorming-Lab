@@ -2,43 +2,217 @@ const express = require('express');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
+const Database = require('better-sqlite3');
 
 const app = express();
 const PORT = 3000;
-const DATA_FILE = path.join(__dirname, 'server-data', 'data.json');
+const DB_DIR = path.join(__dirname, 'server-data');
+const DB_PATH = path.join(DB_DIR, 'budget.db');
 
-app.use(express.json());
+app.use(express.json({ limit: '5mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Ensure data directory exists
-fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
+// --- Database setup ---
 
-app.get('/api/data', (req, res) => {
-  try {
-    const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-    res.json(data);
-  } catch {
-    res.json({ text: 'it works' });
-  }
+fs.mkdirSync(DB_DIR, { recursive: true });
+const db = new Database(DB_PATH);
+db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS budgets (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'time',
+    periodType TEXT NOT NULL DEFAULT 'weekly',
+    periodStartDay INTEGER NOT NULL DEFAULT 0,
+    createdAt INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS categories (
+    id TEXT PRIMARY KEY,
+    budgetId TEXT NOT NULL,
+    name TEXT NOT NULL,
+    color TEXT NOT NULL DEFAULT '#888888',
+    targetHours REAL NOT NULL DEFAULT 0,
+    sortOrder INTEGER NOT NULL DEFAULT 0,
+    createdAt INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL,
+    FOREIGN KEY (budgetId) REFERENCES budgets(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS entries (
+    id TEXT PRIMARY KEY,
+    budgetId TEXT NOT NULL,
+    categoryId TEXT NOT NULL,
+    date TEXT NOT NULL,
+    hours REAL NOT NULL DEFAULT 0,
+    startTime TEXT,
+    endTime TEXT,
+    note TEXT,
+    createdAt INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL,
+    FOREIGN KEY (budgetId) REFERENCES budgets(id) ON DELETE CASCADE,
+    FOREIGN KEY (categoryId) REFERENCES categories(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS period_overrides (
+    id TEXT PRIMARY KEY,
+    budgetId TEXT NOT NULL,
+    categoryId TEXT NOT NULL,
+    periodStart TEXT NOT NULL,
+    targetHours REAL NOT NULL DEFAULT 0,
+    createdAt INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL,
+    FOREIGN KEY (budgetId) REFERENCES budgets(id) ON DELETE CASCADE,
+    FOREIGN KEY (categoryId) REFERENCES categories(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_categories_budget ON categories(budgetId);
+  CREATE INDEX IF NOT EXISTS idx_entries_budget ON entries(budgetId);
+  CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(date);
+  CREATE INDEX IF NOT EXISTS idx_entries_category ON entries(categoryId);
+  CREATE INDEX IF NOT EXISTS idx_period_overrides_budget ON period_overrides(budgetId);
+`);
+
+// --- Helper: upsert by id (updatedAt wins) ---
+
+function upsertRow(table, row, columns) {
+  const setClauses = columns.filter(c => c !== 'id').map(c => `${c} = excluded.${c}`).join(', ');
+  const placeholders = columns.map(() => '?').join(', ');
+  const stmt = db.prepare(`
+    INSERT INTO ${table} (${columns.join(', ')})
+    VALUES (${placeholders})
+    ON CONFLICT(id) DO UPDATE SET ${setClauses}
+    WHERE excluded.updatedAt > ${table}.updatedAt
+  `);
+  stmt.run(...columns.map(c => row[c] ?? null));
+}
+
+// --- Budgets ---
+
+const BUDGET_COLS = ['id', 'name', 'type', 'periodType', 'periodStartDay', 'createdAt', 'updatedAt'];
+
+app.get('/api/budgets', (req, res) => {
+  res.json(db.prepare('SELECT * FROM budgets ORDER BY createdAt').all());
 });
 
-app.put('/api/data', (req, res) => {
-  let existing = null;
-  try {
-    existing = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-  } catch {}
-
-  const incoming = req.body;
-
-  // If server has newer data, keep it and tell the client
-  if (existing && existing.updatedAt && incoming.updatedAt
-      && existing.updatedAt > incoming.updatedAt) {
-    return res.json({ ok: true, kept: 'server', data: existing });
-  }
-
-  fs.writeFileSync(DATA_FILE, JSON.stringify(incoming, null, 2));
-  res.json({ ok: true, kept: 'client' });
+app.post('/api/budgets', (req, res) => {
+  const row = req.body;
+  upsertRow('budgets', row, BUDGET_COLS);
+  res.json(db.prepare('SELECT * FROM budgets WHERE id = ?').get(row.id));
 });
+
+app.get('/api/budgets/:id', (req, res) => {
+  const row = db.prepare('SELECT * FROM budgets WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  res.json(row);
+});
+
+app.put('/api/budgets/:id', (req, res) => {
+  const row = { ...req.body, id: req.params.id };
+  upsertRow('budgets', row, BUDGET_COLS);
+  res.json(db.prepare('SELECT * FROM budgets WHERE id = ?').get(req.params.id));
+});
+
+app.delete('/api/budgets/:id', (req, res) => {
+  db.prepare('DELETE FROM budgets WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+// --- Categories ---
+
+const CATEGORY_COLS = ['id', 'budgetId', 'name', 'color', 'targetHours', 'sortOrder', 'createdAt', 'updatedAt'];
+
+app.get('/api/budgets/:id/categories', (req, res) => {
+  res.json(db.prepare('SELECT * FROM categories WHERE budgetId = ? ORDER BY sortOrder').all(req.params.id));
+});
+
+app.post('/api/budgets/:id/categories', (req, res) => {
+  const row = { ...req.body, budgetId: req.params.id };
+  upsertRow('categories', row, CATEGORY_COLS);
+  res.json(db.prepare('SELECT * FROM categories WHERE id = ?').get(row.id));
+});
+
+app.put('/api/categories/:id', (req, res) => {
+  const row = { ...req.body, id: req.params.id };
+  upsertRow('categories', row, CATEGORY_COLS);
+  res.json(db.prepare('SELECT * FROM categories WHERE id = ?').get(req.params.id));
+});
+
+app.delete('/api/categories/:id', (req, res) => {
+  db.prepare('DELETE FROM categories WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+// --- Entries ---
+
+const ENTRY_COLS = ['id', 'budgetId', 'categoryId', 'date', 'hours', 'startTime', 'endTime', 'note', 'createdAt', 'updatedAt'];
+
+app.get('/api/budgets/:id/entries', (req, res) => {
+  const { from, to } = req.query;
+  let sql = 'SELECT * FROM entries WHERE budgetId = ?';
+  const params = [req.params.id];
+  if (from) { sql += ' AND date >= ?'; params.push(from); }
+  if (to) { sql += ' AND date <= ?'; params.push(to); }
+  sql += ' ORDER BY date, createdAt';
+  res.json(db.prepare(sql).all(...params));
+});
+
+app.post('/api/budgets/:id/entries', (req, res) => {
+  const row = { ...req.body, budgetId: req.params.id };
+  upsertRow('entries', row, ENTRY_COLS);
+  res.json(db.prepare('SELECT * FROM entries WHERE id = ?').get(row.id));
+});
+
+app.put('/api/entries/:id', (req, res) => {
+  const row = { ...req.body, id: req.params.id };
+  upsertRow('entries', row, ENTRY_COLS);
+  res.json(db.prepare('SELECT * FROM entries WHERE id = ?').get(req.params.id));
+});
+
+app.delete('/api/entries/:id', (req, res) => {
+  db.prepare('DELETE FROM entries WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+// --- Sync endpoint ---
+
+app.post('/api/sync', (req, res) => {
+  const { lastSyncAt = 0, budgets: cBudgets = [], categories: cCategories = [], entries: cEntries = [], periodOverrides: cOverrides = [] } = req.body;
+  const now = Date.now();
+
+  const syncTransaction = db.transaction(() => {
+    // Upsert client records
+    for (const r of cBudgets) upsertRow('budgets', r, BUDGET_COLS);
+    for (const r of cCategories) upsertRow('categories', r, CATEGORY_COLS);
+    for (const r of cEntries) upsertRow('entries', r, ENTRY_COLS);
+    for (const r of cOverrides) upsertRow('period_overrides', r, OVERRIDE_COLS);
+
+    // Return server records changed since lastSyncAt
+    const sBudgets = db.prepare('SELECT * FROM budgets WHERE updatedAt > ?').all(lastSyncAt);
+    const sCategories = db.prepare('SELECT * FROM categories WHERE updatedAt > ?').all(lastSyncAt);
+    const sEntries = db.prepare('SELECT * FROM entries WHERE updatedAt > ?').all(lastSyncAt);
+    const sOverrides = db.prepare('SELECT * FROM period_overrides WHERE updatedAt > ?').all(lastSyncAt);
+
+    return { budgets: sBudgets, categories: sCategories, entries: sEntries, periodOverrides: sOverrides, syncedAt: now };
+  });
+
+  res.json(syncTransaction());
+});
+
+// --- Period Overrides ---
+
+const OVERRIDE_COLS = ['id', 'budgetId', 'categoryId', 'periodStart', 'targetHours', 'createdAt', 'updatedAt'];
+
+// --- SPA fallback ---
+
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// --- Start server ---
 
 const server = https.createServer({
   cert: fs.readFileSync(path.join(__dirname, 'cert.pem')),

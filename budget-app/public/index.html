@@ -2,153 +2,29 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <title>Budget App</title>
   <link rel="stylesheet" href="style.css">
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#1a1a2e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <script type="importmap">
+  {
+    "imports": {
+      "preact": "https://esm.sh/preact@10.25.4",
+      "preact/hooks": "https://esm.sh/preact@10.25.4/hooks",
+      "htm/preact": "https://esm.sh/htm@3.1.1/preact?external=preact"
+    }
+  }
+  </script>
 </head>
 <body>
-  <h1>Budget App</h1>
-  <input type="text" id="test" value="" placeholder="type something...">
-  <p id="status">Loading...</p>
-  <p id="debug" style="color:#555;font-size:0.75rem;margin-top:0.5rem;"></p>
-
+  <div id="app"></div>
   <script>
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js');
     }
-
-    // --- IndexedDB helpers ---
-    function openDB() {
-      return new Promise((resolve, reject) => {
-        const req = indexedDB.open('budget-app', 1);
-        req.onupgradeneeded = () => req.result.createObjectStore('kv');
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
-      });
-    }
-
-    async function localGet(key) {
-      const db = await openDB();
-      return new Promise((resolve) => {
-        const tx = db.transaction('kv', 'readonly');
-        const req = tx.objectStore('kv').get(key);
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => resolve(undefined);
-      });
-    }
-
-    async function localSet(key, value) {
-      const db = await openDB();
-      return new Promise((resolve) => {
-        const tx = db.transaction('kv', 'readwrite');
-        tx.objectStore('kv').put(value, key);
-        tx.oncomplete = () => resolve();
-      });
-    }
-
-    // --- Sync ---
-    let pendingSync = false;
-
-    async function syncFromServer() {
-      try {
-        const res = await fetch('/api/data');
-        if (res.ok) return await res.json();
-      } catch {}
-      return null;
-    }
-
-    async function syncToServer(data) {
-      try {
-        const res = await fetch('/api/data', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data)
-        });
-        if (res.ok) {
-          const synced = await res.json();
-          // Server may have kept its newer version
-          if (synced.kept === 'server') {
-            await localSet('data', synced.data);
-            input.value = synced.data.text;
-            status.textContent = 'Server had newer data';
-          } else {
-            status.textContent = 'Saved & synced';
-          }
-          pendingSync = false;
-          return true;
-        }
-      } catch {}
-      pendingSync = true;
-      status.textContent = 'Saved locally — will sync when online';
-      return false;
-    }
-
-    // Retry pending sync every 30 seconds
-    setInterval(async () => {
-      if (!pendingSync) return;
-      const data = await localGet('data');
-      if (data) await syncToServer(data);
-    }, 30000);
-
-    // Also retry when the browser comes back online
-    window.addEventListener('online', async () => {
-      if (!pendingSync) return;
-      const data = await localGet('data');
-      if (data) await syncToServer(data);
-    });
-
-    // --- App ---
-    const input = document.getElementById('test');
-    const status = document.getElementById('status');
-    const debug = document.getElementById('debug');
-
-    async function load() {
-      debug.textContent = 'v4 | ';
-
-      // Always load local first so there's never an empty screen
-      const localData = await localGet('data');
-      debug.textContent += localData ? `local: "${localData.text}"` : 'local: empty';
-
-      if (localData) {
-        input.value = localData.text;
-        status.textContent = 'Loaded local data';
-      }
-
-      // Then try to sync with server
-      const serverData = await syncFromServer();
-      if (serverData) {
-        if (!localData || serverData.updatedAt >= (localData.updatedAt || 0)) {
-          input.value = serverData.text;
-          await localSet('data', serverData);
-          status.textContent = 'Synced with server';
-        } else {
-          // Local is newer, push it
-          await syncToServer(localData);
-        }
-      } else if (localData) {
-        pendingSync = true;
-        status.textContent = 'Offline — using local data';
-      } else {
-        const defaultData = { text: 'it works', updatedAt: Date.now() };
-        input.value = defaultData.text;
-        await localSet('data', defaultData);
-        status.textContent = 'Fresh start';
-      }
-    }
-
-    let saveTimeout;
-    input.addEventListener('input', () => {
-      clearTimeout(saveTimeout);
-      saveTimeout = setTimeout(async () => {
-        const data = { text: input.value, updatedAt: Date.now() };
-        await localSet('data', data);
-        await syncToServer(data);
-      }, 500);
-    });
-
-    load();
   </script>
+  <script type="module" src="js/app.js"></script>
 </body>
 </html>
