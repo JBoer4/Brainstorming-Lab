@@ -26,6 +26,7 @@ db.exec(`
     type TEXT NOT NULL DEFAULT 'time',
     periodType TEXT NOT NULL DEFAULT 'weekly',
     periodStartDay INTEGER NOT NULL DEFAULT 0,
+    deleted INTEGER NOT NULL DEFAULT 0,
     createdAt INTEGER NOT NULL,
     updatedAt INTEGER NOT NULL
   );
@@ -37,6 +38,7 @@ db.exec(`
     color TEXT NOT NULL DEFAULT '#888888',
     targetHours REAL NOT NULL DEFAULT 0,
     sortOrder INTEGER NOT NULL DEFAULT 0,
+    deleted INTEGER NOT NULL DEFAULT 0,
     createdAt INTEGER NOT NULL,
     updatedAt INTEGER NOT NULL,
     FOREIGN KEY (budgetId) REFERENCES budgets(id) ON DELETE CASCADE
@@ -51,6 +53,7 @@ db.exec(`
     startTime TEXT,
     endTime TEXT,
     note TEXT,
+    deleted INTEGER NOT NULL DEFAULT 0,
     createdAt INTEGER NOT NULL,
     updatedAt INTEGER NOT NULL,
     FOREIGN KEY (budgetId) REFERENCES budgets(id) ON DELETE CASCADE,
@@ -63,6 +66,7 @@ db.exec(`
     categoryId TEXT NOT NULL,
     periodStart TEXT NOT NULL,
     targetHours REAL NOT NULL DEFAULT 0,
+    deleted INTEGER NOT NULL DEFAULT 0,
     createdAt INTEGER NOT NULL,
     updatedAt INTEGER NOT NULL,
     FOREIGN KEY (budgetId) REFERENCES budgets(id) ON DELETE CASCADE,
@@ -75,6 +79,15 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_entries_category ON entries(categoryId);
   CREATE INDEX IF NOT EXISTS idx_period_overrides_budget ON period_overrides(budgetId);
 `);
+
+// Migrate: add deleted column to existing tables if missing
+const tables = ['budgets', 'categories', 'entries', 'period_overrides'];
+for (const table of tables) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.find(c => c.name === 'deleted')) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0`);
+  }
+}
 
 // --- Helper: upsert by id (updatedAt wins) ---
 
@@ -92,67 +105,73 @@ function upsertRow(table, row, columns) {
 
 // --- Budgets ---
 
-const BUDGET_COLS = ['id', 'name', 'type', 'periodType', 'periodStartDay', 'createdAt', 'updatedAt'];
+const BUDGET_COLS = ['id', 'name', 'type', 'periodType', 'periodStartDay', 'deleted', 'createdAt', 'updatedAt'];
 
 app.get('/api/budgets', (req, res) => {
-  res.json(db.prepare('SELECT * FROM budgets ORDER BY createdAt').all());
+  res.json(db.prepare('SELECT * FROM budgets WHERE deleted = 0 ORDER BY createdAt').all());
 });
 
 app.post('/api/budgets', (req, res) => {
-  const row = req.body;
+  const row = { deleted: 0, ...req.body };
   upsertRow('budgets', row, BUDGET_COLS);
   res.json(db.prepare('SELECT * FROM budgets WHERE id = ?').get(row.id));
 });
 
 app.get('/api/budgets/:id', (req, res) => {
-  const row = db.prepare('SELECT * FROM budgets WHERE id = ?').get(req.params.id);
+  const row = db.prepare('SELECT * FROM budgets WHERE id = ? AND deleted = 0').get(req.params.id);
   if (!row) return res.status(404).json({ error: 'Not found' });
   res.json(row);
 });
 
 app.put('/api/budgets/:id', (req, res) => {
-  const row = { ...req.body, id: req.params.id };
+  const row = { deleted: 0, ...req.body, id: req.params.id };
   upsertRow('budgets', row, BUDGET_COLS);
   res.json(db.prepare('SELECT * FROM budgets WHERE id = ?').get(req.params.id));
 });
 
 app.delete('/api/budgets/:id', (req, res) => {
-  db.prepare('DELETE FROM budgets WHERE id = ?').run(req.params.id);
+  const now = Date.now();
+  // Soft-delete budget and all its children
+  db.prepare('UPDATE budgets SET deleted = 1, updatedAt = ? WHERE id = ?').run(now, req.params.id);
+  db.prepare('UPDATE categories SET deleted = 1, updatedAt = ? WHERE budgetId = ?').run(now, req.params.id);
+  db.prepare('UPDATE entries SET deleted = 1, updatedAt = ? WHERE budgetId = ?').run(now, req.params.id);
+  db.prepare('UPDATE period_overrides SET deleted = 1, updatedAt = ? WHERE budgetId = ?').run(now, req.params.id);
   res.json({ ok: true });
 });
 
 // --- Categories ---
 
-const CATEGORY_COLS = ['id', 'budgetId', 'name', 'color', 'targetHours', 'sortOrder', 'createdAt', 'updatedAt'];
+const CATEGORY_COLS = ['id', 'budgetId', 'name', 'color', 'targetHours', 'sortOrder', 'deleted', 'createdAt', 'updatedAt'];
 
 app.get('/api/budgets/:id/categories', (req, res) => {
-  res.json(db.prepare('SELECT * FROM categories WHERE budgetId = ? ORDER BY sortOrder').all(req.params.id));
+  res.json(db.prepare('SELECT * FROM categories WHERE budgetId = ? AND deleted = 0 ORDER BY sortOrder').all(req.params.id));
 });
 
 app.post('/api/budgets/:id/categories', (req, res) => {
-  const row = { ...req.body, budgetId: req.params.id };
+  const row = { deleted: 0, ...req.body, budgetId: req.params.id };
   upsertRow('categories', row, CATEGORY_COLS);
   res.json(db.prepare('SELECT * FROM categories WHERE id = ?').get(row.id));
 });
 
 app.put('/api/categories/:id', (req, res) => {
-  const row = { ...req.body, id: req.params.id };
+  const row = { deleted: 0, ...req.body, id: req.params.id };
   upsertRow('categories', row, CATEGORY_COLS);
   res.json(db.prepare('SELECT * FROM categories WHERE id = ?').get(req.params.id));
 });
 
 app.delete('/api/categories/:id', (req, res) => {
-  db.prepare('DELETE FROM categories WHERE id = ?').run(req.params.id);
+  const now = Date.now();
+  db.prepare('UPDATE categories SET deleted = 1, updatedAt = ? WHERE id = ?').run(now, req.params.id);
   res.json({ ok: true });
 });
 
 // --- Entries ---
 
-const ENTRY_COLS = ['id', 'budgetId', 'categoryId', 'date', 'hours', 'startTime', 'endTime', 'note', 'createdAt', 'updatedAt'];
+const ENTRY_COLS = ['id', 'budgetId', 'categoryId', 'date', 'hours', 'startTime', 'endTime', 'note', 'deleted', 'createdAt', 'updatedAt'];
 
 app.get('/api/budgets/:id/entries', (req, res) => {
   const { from, to } = req.query;
-  let sql = 'SELECT * FROM entries WHERE budgetId = ?';
+  let sql = 'SELECT * FROM entries WHERE budgetId = ? AND deleted = 0';
   const params = [req.params.id];
   if (from) { sql += ' AND date >= ?'; params.push(from); }
   if (to) { sql += ' AND date <= ?'; params.push(to); }
@@ -161,36 +180,39 @@ app.get('/api/budgets/:id/entries', (req, res) => {
 });
 
 app.post('/api/budgets/:id/entries', (req, res) => {
-  const row = { ...req.body, budgetId: req.params.id };
+  const row = { deleted: 0, ...req.body, budgetId: req.params.id };
   upsertRow('entries', row, ENTRY_COLS);
   res.json(db.prepare('SELECT * FROM entries WHERE id = ?').get(row.id));
 });
 
 app.put('/api/entries/:id', (req, res) => {
-  const row = { ...req.body, id: req.params.id };
+  const row = { deleted: 0, ...req.body, id: req.params.id };
   upsertRow('entries', row, ENTRY_COLS);
   res.json(db.prepare('SELECT * FROM entries WHERE id = ?').get(req.params.id));
 });
 
 app.delete('/api/entries/:id', (req, res) => {
-  db.prepare('DELETE FROM entries WHERE id = ?').run(req.params.id);
+  const now = Date.now();
+  db.prepare('UPDATE entries SET deleted = 1, updatedAt = ? WHERE id = ?').run(now, req.params.id);
   res.json({ ok: true });
 });
 
 // --- Sync endpoint ---
+// Returns ALL records changed since lastSyncAt, including soft-deleted ones.
+// This is how deletions propagate to other devices.
 
 app.post('/api/sync', (req, res) => {
   const { lastSyncAt = 0, budgets: cBudgets = [], categories: cCategories = [], entries: cEntries = [], periodOverrides: cOverrides = [] } = req.body;
   const now = Date.now();
 
   const syncTransaction = db.transaction(() => {
-    // Upsert client records
-    for (const r of cBudgets) upsertRow('budgets', r, BUDGET_COLS);
-    for (const r of cCategories) upsertRow('categories', r, CATEGORY_COLS);
-    for (const r of cEntries) upsertRow('entries', r, ENTRY_COLS);
-    for (const r of cOverrides) upsertRow('period_overrides', r, OVERRIDE_COLS);
+    // Upsert client records (including soft-deleted ones)
+    for (const r of cBudgets) upsertRow('budgets', { deleted: 0, ...r }, BUDGET_COLS);
+    for (const r of cCategories) upsertRow('categories', { deleted: 0, ...r }, CATEGORY_COLS);
+    for (const r of cEntries) upsertRow('entries', { deleted: 0, ...r }, ENTRY_COLS);
+    for (const r of cOverrides) upsertRow('period_overrides', { deleted: 0, ...r }, OVERRIDE_COLS);
 
-    // Return server records changed since lastSyncAt
+    // Return ALL server records changed since lastSyncAt (including deleted)
     const sBudgets = db.prepare('SELECT * FROM budgets WHERE updatedAt > ?').all(lastSyncAt);
     const sCategories = db.prepare('SELECT * FROM categories WHERE updatedAt > ?').all(lastSyncAt);
     const sEntries = db.prepare('SELECT * FROM entries WHERE updatedAt > ?').all(lastSyncAt);
@@ -204,7 +226,7 @@ app.post('/api/sync', (req, res) => {
 
 // --- Period Overrides ---
 
-const OVERRIDE_COLS = ['id', 'budgetId', 'categoryId', 'periodStart', 'targetHours', 'createdAt', 'updatedAt'];
+const OVERRIDE_COLS = ['id', 'budgetId', 'categoryId', 'periodStart', 'targetHours', 'deleted', 'createdAt', 'updatedAt'];
 
 // --- SPA fallback ---
 

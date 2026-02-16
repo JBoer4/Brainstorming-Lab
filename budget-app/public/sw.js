@@ -1,4 +1,4 @@
-const CACHE_NAME = 'budget-app-v5';
+const CACHE_NAME = 'budget-app-v8';
 const ASSETS = [
   '/',
   '/index.html',
@@ -11,6 +11,10 @@ const ASSETS = [
   '/js/sync.js',
   '/js/api.js',
   '/js/utils.js',
+  '/js/vendor/preact.js',
+  '/js/vendor/preact-hooks.js',
+  '/js/vendor/htm.js',
+  '/js/vendor/htm-preact.js',
   '/js/components/Dashboard.js',
   '/js/components/BudgetHome.js',
   '/js/components/DailyLog.js',
@@ -18,19 +22,17 @@ const ASSETS = [
   '/js/components/History.js',
 ];
 
-const CDN_URLS = [
-  'https://esm.sh/preact@10.25.4',
-  'https://esm.sh/preact@10.25.4/hooks',
-  'https://esm.sh/htm@3.1.1/preact?external=preact',
-];
-
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then(async (cache) => {
-      await cache.addAll(ASSETS);
-      // Cache CDN separately — don't block install on CDN failure
-      for (const url of CDN_URLS) {
-        try { await cache.add(url); } catch {}
+      // Cache each asset individually so one failure doesn't block the rest.
+      // This is critical on LAN with self-signed certs where requests can be flaky.
+      for (const url of ASSETS) {
+        try {
+          await cache.add(url);
+        } catch (e) {
+          console.warn('SW: failed to cache', url, e.message);
+        }
       }
     })
   );
@@ -49,28 +51,42 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Let API requests go straight to network
+  // Let API requests go straight to network (never cache)
   if (url.pathname.startsWith('/api/')) return;
 
-  // SPA fallback: non-asset navigation requests get index.html
+  // For navigation requests: serve cached index.html (SPA shell),
+  // update cache in background when online.
   if (event.request.mode === 'navigate') {
     event.respondWith(
-      fetch(event.request).catch(() => caches.match('/index.html'))
+      caches.match('/index.html').then((cached) => {
+        // Always try to update in background
+        const fetchPromise = fetch(event.request).then((res) => {
+          if (res.ok) {
+            const clone = res.clone();
+            caches.open(CACHE_NAME).then((c) => c.put('/index.html', clone));
+          }
+          return res;
+        }).catch(() => null);
+
+        // Return cache immediately if available, otherwise wait for network
+        return cached || fetchPromise;
+      })
     );
     return;
   }
 
-  // Stale-while-revalidate for everything else
+  // All other assets: cache-first, update in background (stale-while-revalidate)
   event.respondWith(
     caches.match(event.request).then((cached) => {
       const fetchPromise = fetch(event.request).then((res) => {
         if (res.ok) {
           const clone = res.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          caches.open(CACHE_NAME).then((c) => c.put(event.request, clone));
         }
         return res;
-      }).catch(() => cached);
+      }).catch(() => null);
 
+      // Return cache immediately if available, otherwise wait for network
       return cached || fetchPromise;
     })
   );

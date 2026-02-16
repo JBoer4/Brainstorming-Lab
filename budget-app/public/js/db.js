@@ -1,4 +1,5 @@
 // IndexedDB schema, CRUD, dirty tracking
+// Uses soft deletes (deleted flag) so deletions propagate via sync.
 
 const DB_NAME = 'budget-app';
 const DB_VERSION = 2;
@@ -49,20 +50,31 @@ function promisify(req) {
 
 // --- Generic CRUD ---
 
+// Get all non-deleted records
 async function getAll(storeName) {
+  const store = await tx(storeName);
+  const all = await promisify(store.getAll());
+  return all.filter(r => !r.deleted);
+}
+
+// Get all records including deleted (for sync/dirty tracking)
+async function getAllRaw(storeName) {
   const store = await tx(storeName);
   return promisify(store.getAll());
 }
 
 async function getById(storeName, id) {
   const store = await tx(storeName);
-  return promisify(store.get(id));
+  const r = await promisify(store.get(id));
+  return (r && !r.deleted) ? r : undefined;
 }
 
+// Get non-deleted records by index
 async function getAllByIndex(storeName, indexName, value) {
   const store = await tx(storeName);
   const index = store.index(indexName);
-  return promisify(index.getAll(value));
+  const all = await promisify(index.getAll(value));
+  return all.filter(r => !r.deleted);
 }
 
 async function put(storeName, record) {
@@ -75,7 +87,16 @@ async function putClean(storeName, record) {
   return promisify(store.put({ ...record, _dirty: 0 }));
 }
 
-async function remove(storeName, id) {
+// Soft delete: mark as deleted + dirty, with new updatedAt
+async function softDelete(storeName, id, updatedAt) {
+  const store = await tx(storeName, 'readwrite');
+  const existing = await promisify(store.get(id));
+  if (!existing) return;
+  return promisify(store.put({ ...existing, deleted: 1, updatedAt, _dirty: 1 }));
+}
+
+// Hard remove (only used internally after sync confirms deletion)
+async function hardRemove(storeName, id) {
   const store = await tx(storeName, 'readwrite');
   return promisify(store.delete(id));
 }
@@ -96,7 +117,7 @@ async function setMeta(key, value) {
 // --- Dirty records ---
 
 async function getDirty(storeName) {
-  const all = await getAll(storeName);
+  const all = await getAllRaw(storeName);
   return all.filter(r => r._dirty);
 }
 
@@ -114,21 +135,21 @@ export const db = {
   getBudget: (id) => getById('budgets', id),
   putBudget: (record) => put('budgets', record),
   putBudgetClean: (record) => putClean('budgets', record),
-  deleteBudget: (id) => remove('budgets', id),
+  deleteBudget: (id, ts) => softDelete('budgets', id, ts),
 
   // Categories
   getCategories: (budgetId) => getAllByIndex('categories', 'budgetId', budgetId),
   getCategory: (id) => getById('categories', id),
   putCategory: (record) => put('categories', record),
   putCategoryClean: (record) => putClean('categories', record),
-  deleteCategory: (id) => remove('categories', id),
+  deleteCategory: (id, ts) => softDelete('categories', id, ts),
 
   // Entries
   getEntries: (budgetId) => getAllByIndex('entries', 'budgetId', budgetId),
   getEntry: (id) => getById('entries', id),
   putEntry: (record) => put('entries', record),
   putEntryClean: (record) => putClean('entries', record),
-  deleteEntry: (id) => remove('entries', id),
+  deleteEntry: (id, ts) => softDelete('entries', id, ts),
 
   // Period Overrides
   getOverrides: (budgetId) => getAllByIndex('periodOverrides', 'budgetId', budgetId),

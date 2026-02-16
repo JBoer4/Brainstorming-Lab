@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { html } from 'htm/preact';
 import { db } from '../db.js';
-import { api } from '../api.js';
 import { navigate } from '../router.js';
 import { syncAfterMutation } from '../sync.js';
 import { now, getWeekStart, getWeekDates, toDateStr, formatRange, dayName } from '../utils.js';
@@ -74,14 +73,15 @@ export function BudgetHome({ budgetId }) {
   }
 
   async function deleteBudget() {
-    // Delete locally: entries, categories, then budget
+    const ts = now();
+    // Soft-delete locally: entries, categories, then budget
     const cats = await db.getCategories(budgetId);
     const ents = await db.getEntries(budgetId);
-    for (const e of ents) await db.deleteEntry(e.id);
-    for (const c of cats) await db.deleteCategory(c.id);
-    await db.deleteBudget(budgetId);
-    // Delete on server
-    try { await api.deleteBudget(budgetId); } catch {}
+    for (const e of ents) await db.deleteEntry(e.id, ts);
+    for (const c of cats) await db.deleteCategory(c.id, ts);
+    await db.deleteBudget(budgetId, ts);
+    // Sync propagates the soft deletes to server and other devices
+    syncAfterMutation();
     navigate('/');
   }
 

@@ -67,7 +67,7 @@ export function DailyLog({ budgetId, date: dateProp }) {
   }
 
   async function removeEntry(id) {
-    await db.deleteEntry(id);
+    await db.deleteEntry(id, now());
     setEntries(prev => prev.filter(e => e.id !== id));
     syncAfterMutation();
   }

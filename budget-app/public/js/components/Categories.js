@@ -52,7 +52,7 @@ export function Categories({ budgetId }) {
   }
 
   async function removeCat(id) {
-    await db.deleteCategory(id);
+    await db.deleteCategory(id, now());
     setCategories(prev => prev.filter(c => c.id !== id));
     syncAfterMutation();
   }
