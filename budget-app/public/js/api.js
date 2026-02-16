@@ -40,6 +40,28 @@ export const api = {
   updateEntry: (id, data) => request(`/entries/${id}`, { method: 'PUT', body: data }),
   deleteEntry: (id) => request(`/entries/${id}`, { method: 'DELETE' }),
 
+  // Transactions
+  getTransactions: (budgetId, from, to) => {
+    let path = `/budgets/${budgetId}/transactions`;
+    const params = new URLSearchParams();
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    const qs = params.toString();
+    if (qs) path += `?${qs}`;
+    return request(path);
+  },
+  createTransaction: (budgetId, data) => request(`/budgets/${budgetId}/transactions`, { method: 'POST', body: data }),
+  updateTransaction: (id, data) => request(`/transactions/${id}`, { method: 'PUT', body: data }),
+  deleteTransaction: (id) => request(`/transactions/${id}`, { method: 'DELETE' }),
+  importOFX: (budgetId, ofxText) => {
+    return fetch(`${BASE}/budgets/${budgetId}/import-ofx`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: ofxText,
+    }).then(r => { if (!r.ok) throw new Error(`API ${r.status}`); return r.json(); });
+  },
+  batchCreateTransactions: (budgetId, transactions) => request(`/budgets/${budgetId}/transactions/batch`, { method: 'POST', body: transactions }),
+
   // Sync
   sync: (payload) => request('/sync', { method: 'POST', body: payload }),
 };

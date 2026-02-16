@@ -10,6 +10,7 @@ const DB_DIR = path.join(__dirname, 'server-data');
 const DB_PATH = path.join(DB_DIR, 'budget.db');
 
 app.use(express.json({ limit: '5mb' }));
+app.use(express.text({ limit: '5mb', type: 'text/plain' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --- Database setup ---
@@ -78,6 +79,26 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(date);
   CREATE INDEX IF NOT EXISTS idx_entries_category ON entries(categoryId);
   CREATE INDEX IF NOT EXISTS idx_period_overrides_budget ON period_overrides(budgetId);
+
+  CREATE TABLE IF NOT EXISTS transactions (
+    id TEXT PRIMARY KEY,
+    budgetId TEXT NOT NULL,
+    categoryId TEXT,
+    date TEXT NOT NULL,
+    amount REAL NOT NULL,
+    payee TEXT,
+    memo TEXT,
+    fitid TEXT,
+    trntype TEXT,
+    deleted INTEGER NOT NULL DEFAULT 0,
+    createdAt INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL,
+    FOREIGN KEY (budgetId) REFERENCES budgets(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_transactions_budget ON transactions(budgetId);
+  CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
+  CREATE INDEX IF NOT EXISTS idx_transactions_category ON transactions(categoryId);
 `);
 
 // Migrate: add deleted column to existing tables if missing
@@ -136,6 +157,7 @@ app.delete('/api/budgets/:id', (req, res) => {
   db.prepare('UPDATE categories SET deleted = 1, updatedAt = ? WHERE budgetId = ?').run(now, req.params.id);
   db.prepare('UPDATE entries SET deleted = 1, updatedAt = ? WHERE budgetId = ?').run(now, req.params.id);
   db.prepare('UPDATE period_overrides SET deleted = 1, updatedAt = ? WHERE budgetId = ?').run(now, req.params.id);
+  db.prepare('UPDATE transactions SET deleted = 1, updatedAt = ? WHERE budgetId = ?').run(now, req.params.id);
   res.json({ ok: true });
 });
 
@@ -197,12 +219,106 @@ app.delete('/api/entries/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// --- Transactions ---
+
+const TRANSACTION_COLS = ['id', 'budgetId', 'categoryId', 'date', 'amount', 'payee', 'memo', 'fitid', 'trntype', 'deleted', 'createdAt', 'updatedAt'];
+
+app.get('/api/budgets/:id/transactions', (req, res) => {
+  const { from, to } = req.query;
+  let sql = 'SELECT * FROM transactions WHERE budgetId = ? AND deleted = 0';
+  const params = [req.params.id];
+  if (from) { sql += ' AND date >= ?'; params.push(from); }
+  if (to) { sql += ' AND date <= ?'; params.push(to); }
+  sql += ' ORDER BY date DESC, createdAt';
+  res.json(db.prepare(sql).all(...params));
+});
+
+app.post('/api/budgets/:id/transactions', (req, res) => {
+  const row = { deleted: 0, ...req.body, budgetId: req.params.id };
+  upsertRow('transactions', row, TRANSACTION_COLS);
+  res.json(db.prepare('SELECT * FROM transactions WHERE id = ?').get(row.id));
+});
+
+app.put('/api/transactions/:id', (req, res) => {
+  const row = { deleted: 0, ...req.body, id: req.params.id };
+  upsertRow('transactions', row, TRANSACTION_COLS);
+  res.json(db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id));
+});
+
+app.delete('/api/transactions/:id', (req, res) => {
+  const now = Date.now();
+  db.prepare('UPDATE transactions SET deleted = 1, updatedAt = ? WHERE id = ?').run(now, req.params.id);
+  res.json({ ok: true });
+});
+
+// --- OFX Import ---
+
+function parseOFX(ofxText) {
+  const transactions = [];
+  // Match each STMTTRN block
+  const trnRegex = /<STMTTRN>([\s\S]*?)<\/STMTTRN>/gi;
+  let match;
+  while ((match = trnRegex.exec(ofxText)) !== null) {
+    const block = match[1];
+    const get = (tag) => {
+      const m = block.match(new RegExp(`<${tag}>([^<\\r\\n]+)`, 'i'));
+      return m ? m[1].trim() : null;
+    };
+    const dtposted = get('DTPOSTED');
+    let date = null;
+    if (dtposted) {
+      // YYYYMMDD... → YYYY-MM-DD
+      date = `${dtposted.slice(0, 4)}-${dtposted.slice(4, 6)}-${dtposted.slice(6, 8)}`;
+    }
+    const amount = parseFloat(get('TRNAMT')) || 0;
+    transactions.push({
+      fitid: get('FITID'),
+      date,
+      amount,
+      trntype: get('TRNTYPE'),
+      payee: get('NAME'),
+      memo: get('MEMO'),
+    });
+  }
+  return transactions;
+}
+
+app.post('/api/budgets/:id/import-ofx', (req, res) => {
+  try {
+    const ofxText = typeof req.body === 'string' ? req.body : '';
+    if (!ofxText) return res.status(400).json({ error: 'Empty OFX body' });
+    const parsed = parseOFX(ofxText);
+    res.json(parsed);
+  } catch (e) {
+    res.status(400).json({ error: 'Failed to parse OFX: ' + e.message });
+  }
+});
+
+// --- Batch Import ---
+
+app.post('/api/budgets/:id/transactions/batch', (req, res) => {
+  const items = req.body;
+  if (!Array.isArray(items)) return res.status(400).json({ error: 'Expected array' });
+  const batchInsert = db.transaction(() => {
+    for (const item of items) {
+      const row = { deleted: 0, ...item, budgetId: req.params.id };
+      upsertRow('transactions', row, TRANSACTION_COLS);
+    }
+  });
+  batchInsert();
+  res.json({ imported: items.length });
+});
+
+// --- Period Overrides ---
+
+const OVERRIDE_COLS = ['id', 'budgetId', 'categoryId', 'periodStart', 'targetHours', 'deleted', 'createdAt', 'updatedAt'];
+
 // --- Sync endpoint ---
 // Returns ALL records changed since lastSyncAt, including soft-deleted ones.
 // This is how deletions propagate to other devices.
 
 app.post('/api/sync', (req, res) => {
-  const { lastSyncAt = 0, budgets: cBudgets = [], categories: cCategories = [], entries: cEntries = [], periodOverrides: cOverrides = [] } = req.body;
+  const { lastSyncAt = 0, budgets: cBudgets = [], categories: cCategories = [], entries: cEntries = [], periodOverrides: cOverrides = [], transactions: cTransactions = [] } = req.body;
   const now = Date.now();
 
   const syncTransaction = db.transaction(() => {
@@ -211,22 +327,20 @@ app.post('/api/sync', (req, res) => {
     for (const r of cCategories) upsertRow('categories', { deleted: 0, ...r }, CATEGORY_COLS);
     for (const r of cEntries) upsertRow('entries', { deleted: 0, ...r }, ENTRY_COLS);
     for (const r of cOverrides) upsertRow('period_overrides', { deleted: 0, ...r }, OVERRIDE_COLS);
+    for (const r of cTransactions) upsertRow('transactions', { deleted: 0, ...r }, TRANSACTION_COLS);
 
     // Return ALL server records changed since lastSyncAt (including deleted)
     const sBudgets = db.prepare('SELECT * FROM budgets WHERE updatedAt > ?').all(lastSyncAt);
     const sCategories = db.prepare('SELECT * FROM categories WHERE updatedAt > ?').all(lastSyncAt);
     const sEntries = db.prepare('SELECT * FROM entries WHERE updatedAt > ?').all(lastSyncAt);
     const sOverrides = db.prepare('SELECT * FROM period_overrides WHERE updatedAt > ?').all(lastSyncAt);
+    const sTransactions = db.prepare('SELECT * FROM transactions WHERE updatedAt > ?').all(lastSyncAt);
 
-    return { budgets: sBudgets, categories: sCategories, entries: sEntries, periodOverrides: sOverrides, syncedAt: now };
+    return { budgets: sBudgets, categories: sCategories, entries: sEntries, periodOverrides: sOverrides, transactions: sTransactions, syncedAt: now };
   });
 
   res.json(syncTransaction());
 });
-
-// --- Period Overrides ---
-
-const OVERRIDE_COLS = ['id', 'budgetId', 'categoryId', 'periodStart', 'targetHours', 'deleted', 'createdAt', 'updatedAt'];
 
 // --- SPA fallback ---
 

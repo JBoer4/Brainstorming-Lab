@@ -1,4 +1,4 @@
-const CACHE_NAME = 'budget-app-v8';
+const CACHE_NAME = 'budget-app-v9';
 const ASSETS = [
   '/',
   '/index.html',
@@ -20,6 +20,10 @@ const ASSETS = [
   '/js/components/DailyLog.js',
   '/js/components/Categories.js',
   '/js/components/History.js',
+  '/js/components/MoneyHome.js',
+  '/js/components/MoneyCategories.js',
+  '/js/components/Transactions.js',
+  '/js/components/ImportOFX.js',
 ];
 
 self.addEventListener('install', (event) => {

@@ -28,6 +28,7 @@ export async function sync() {
     const dirtyCategories = await db.getDirtyCategories();
     const dirtyEntries = await db.getDirtyEntries();
     const dirtyOverrides = await db.getDirtyOverrides();
+    const dirtyTransactions = await db.getDirtyTransactions();
 
     const payload = {
       lastSyncAt,
@@ -35,6 +36,7 @@ export async function sync() {
       categories: dirtyCategories.map(db.cleanRecord),
       entries: dirtyEntries.map(db.cleanRecord),
       periodOverrides: dirtyOverrides.map(db.cleanRecord),
+      transactions: dirtyTransactions.map(db.cleanRecord),
     };
 
     const result = await api.sync(payload);
@@ -46,6 +48,7 @@ export async function sync() {
     for (const r of result.categories || []) await db.putCategoryClean(r);
     for (const r of result.entries || []) await db.putEntryClean(r);
     for (const r of result.periodOverrides || []) await db.putOverrideClean(r);
+    for (const r of result.transactions || []) await db.putTransactionClean(r);
 
     await db.setMeta('lastSyncAt', result.syncedAt);
     notify('synced');
@@ -76,6 +79,7 @@ export function startSyncLoop() {
       ...(await db.getDirtyCategories()),
       ...(await db.getDirtyEntries()),
       ...(await db.getDirtyOverrides()),
+      ...(await db.getDirtyTransactions()),
     ];
     if (dirty.length > 0) sync().catch(() => {});
   }, 30000);

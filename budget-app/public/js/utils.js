@@ -76,3 +76,40 @@ export function calcHours(startTime, endTime) {
 export function today() {
   return toDateStr(new Date());
 }
+
+// --- Month utilities ---
+
+const MONTHS_FULL = ['January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'];
+
+export function getMonthStart(date = new Date()) {
+  const d = new Date(date);
+  return new Date(d.getFullYear(), d.getMonth(), 1);
+}
+
+export function getMonthEnd(date = new Date()) {
+  const d = new Date(date);
+  return new Date(d.getFullYear(), d.getMonth() + 1, 0);
+}
+
+export function getMonthLabel(date = new Date()) {
+  const d = new Date(date);
+  return `${MONTHS_FULL[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+export function getMonthDates(date = new Date()) {
+  const start = getMonthStart(date);
+  const end = getMonthEnd(date);
+  return { start: toDateStr(start), end: toDateStr(end) };
+}
+
+export function formatCurrency(amount) {
+  const abs = Math.abs(amount);
+  const formatted = abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return amount < 0 ? `-$${formatted}` : `$${formatted}`;
+}
+
+export function parseOFXDate(dtposted) {
+  if (!dtposted || dtposted.length < 8) return null;
+  return `${dtposted.slice(0, 4)}-${dtposted.slice(4, 6)}-${dtposted.slice(6, 8)}`;
+}

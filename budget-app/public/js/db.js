@@ -2,8 +2,8 @@
 // Uses soft deletes (deleted flag) so deletions propagate via sync.
 
 const DB_NAME = 'budget-app';
-const DB_VERSION = 2;
-const STORES = ['budgets', 'categories', 'entries', 'periodOverrides', 'meta'];
+const DB_VERSION = 3;
+const STORES = ['budgets', 'categories', 'entries', 'periodOverrides', 'transactions', 'meta'];
 
 let dbInstance = null;
 
@@ -27,6 +27,11 @@ function openDB() {
             store.createIndex('categoryId', 'categoryId');
           }
           if (name === 'periodOverrides') store.createIndex('budgetId', 'budgetId');
+          if (name === 'transactions') {
+            store.createIndex('budgetId', 'budgetId');
+            store.createIndex('date', 'date');
+            store.createIndex('categoryId', 'categoryId');
+          }
         }
       }
     };
@@ -156,6 +161,13 @@ export const db = {
   putOverride: (record) => put('periodOverrides', record),
   putOverrideClean: (record) => putClean('periodOverrides', record),
 
+  // Transactions
+  getTransactions: (budgetId) => getAllByIndex('transactions', 'budgetId', budgetId),
+  getTransaction: (id) => getById('transactions', id),
+  putTransaction: (record) => put('transactions', record),
+  putTransactionClean: (record) => putClean('transactions', record),
+  deleteTransaction: (id, ts) => softDelete('transactions', id, ts),
+
   // Meta
   getMeta,
   setMeta,
@@ -165,5 +177,6 @@ export const db = {
   getDirtyCategories: () => getDirty('categories'),
   getDirtyEntries: () => getDirty('entries'),
   getDirtyOverrides: () => getDirty('periodOverrides'),
+  getDirtyTransactions: () => getDirty('transactions'),
   cleanRecord,
 };
