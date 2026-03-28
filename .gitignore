@@ -5,8 +5,12 @@ __pycache__/
 *.ipynb_checkpoints/
 .DS_Store
 data/
+ideas/
+output/
 notes.md
 server-data/
+.venv/
+*.egg-info/
 node_modules/
 *.pem
 
