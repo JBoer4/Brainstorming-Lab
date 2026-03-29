@@ -129,7 +129,8 @@ def identify_player(games: list[dict], connect_code: str | None = None) -> str:
         raise SystemExit(1)
     else:
         # Multiple codes in every game (e.g. played same person all session)
-        print(f"Multiple players appear in every game: {candidates}")
+        display = [c.replace("\uFF03", "#") for c in candidates]
+        print(f"Multiple players appear in every game: {display}")
         print("Use --connect-code to specify which one is you.")
         raise SystemExit(1)
 

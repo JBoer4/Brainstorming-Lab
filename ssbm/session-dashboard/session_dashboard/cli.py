@@ -7,6 +7,12 @@ from pathlib import Path
 from .parse import load_session, identify_player, get_player_port
 from .kpis import compute_game_kpis, aggregate_by_character, filter_completed_games
 from .export import export_session, append_to_history
+from .slippi_api import RankCache, rating_to_tier
+
+
+def _display_code(code: str) -> str:
+    """Replace Slippi's full-width ＃ with standard # for terminal display."""
+    return code.replace("\uFF03", "#") if code else code
 
 
 def main():
@@ -38,6 +44,11 @@ def main():
         default=Path("./output"),
         help="Directory for CSV exports (default: ./output)",
     )
+    parser.add_argument(
+        "--no-ranks",
+        action="store_true",
+        help="Skip Slippi API rank lookups (offline mode).",
+    )
     args = parser.parse_args()
 
     print(f"Loading replays from {args.replay_dir} for {args.date}...")
@@ -51,7 +62,7 @@ def main():
 
     # Identify player by connect code
     player_code = identify_player(games, connect_code=args.connect_code)
-    print(f"Identified player: {player_code}")
+    print(f"Identified player: {_display_code(player_code)}")
 
     # Compute KPIs per game (port can change between games)
     game_kpis = []
@@ -80,18 +91,85 @@ def main():
 
     print(f"Analyzing {len(game_kpis)} completed games.")
 
+    # Look up ranked ratings for all players
+    if not args.no_ranks:
+        rank_cache = RankCache()
+
+        # Look up the player's own rank
+        player_rank = rank_cache.get(player_code)
+        player_rating = player_rank["rating"] if player_rank else None
+        player_tier = player_rank["tier"] if player_rank else None
+
+        # Collect unique opponent codes from the games
+        opp_codes = set()
+        for game in games:
+            for player in game["metadata"]["players"]:
+                if player["connect_code"] and player["connect_code"] != player_code:
+                    opp_codes.add(player["connect_code"])
+
+        # Pre-fetch all opponent ranks concurrently
+        rank_cache.prefetch(opp_codes)
+
+        print(f"Looked up ranks for {rank_cache.api_calls_made} players.")
+        if player_rating is not None:
+            print(f"Your rank: {player_tier} ({player_rating:.0f})")
+        else:
+            print(f"Your rank: {player_tier}")
+
+        # Attach rank data to each game's KPIs
+        for kpis in game_kpis:
+            kpis["player_rating"] = player_rating
+            kpis["player_tier"] = player_tier
+
+            opp_code = kpis.get("opponent_code")
+            if opp_code:
+                opp_rank = rank_cache.get(opp_code)
+                kpis["opponent_rating"] = opp_rank["rating"] if opp_rank else None
+                kpis["opponent_tier"] = opp_rank["tier"] if opp_rank else None
+            else:
+                kpis["opponent_rating"] = None
+                kpis["opponent_tier"] = None
+
     # Aggregate by character
     aggregates = aggregate_by_character(game_kpis)
 
     # Print quick summary
     for char, data in aggregates.items():
         s = data["summary"]
-        lc = f"  L-cancel: {s['lcancel_rate']:.0%}" if s["lcancel_rate"] else ""
+        lc_str = f"{s['lcancel_rate']:.0%}" if s["lcancel_rate"] else "N/A"
         print(f"\n--- {char} ---")
         print(f"  Games: {s['games_played']}  W/L: {s['wins']}-{s['losses']}  "
-              f"Win rate: {s['win_rate']:.0%}{lc}")
+              f"Win rate: {s['win_rate']:.0%}")
         print(f"  Avg stocks taken: {s['avg_stocks_taken']:.1f}  "
               f"lost: {s['avg_stocks_lost']:.1f}")
+
+        # Combat
+        _p = lambda k: s.get(k) if s.get(k) is not None else "N/A"
+        print(f"  Damage/game: {_p('avg_total_damage')}  "
+              f"Conversion rate: {_p('avg_conversion_rate')}%  "
+              f"Openings/kill: {_p('avg_openings_per_kill')}  "
+              f"Dmg/opening: {_p('avg_damage_per_opening')}")
+
+        # Neutral
+        print(f"  Neutral wins: {_p('avg_neutral_wins')}  "
+              f"Counter hits: {_p('avg_counter_hits')}  "
+              f"Trades: {_p('avg_trades')}")
+
+        # Defensive
+        print(f"  Spot dodges: {_p('avg_spot_dodges')}  "
+              f"Air dodges: {_p('avg_air_dodges')}  "
+              f"Rolls: {_p('avg_rolls')}")
+
+        # Movement
+        print(f"  Wavedashes: {_p('avg_wavedashes')}  "
+              f"Wavelands: {_p('avg_wavelands')}  "
+              f"Dash dances: {_p('avg_dash_dances')}  "
+              f"Ledge grabs: {_p('avg_ledge_grabs')}")
+
+        # Inputs
+        print(f"  L-cancel: {lc_str}  "
+              f"IPM: {_p('avg_inputs_per_minute')}  "
+              f"Digital IPM: {_p('avg_digital_inputs_per_minute')}")
 
     # Export CSVs
     created = export_session(game_kpis, aggregates, args.output, args.date)
