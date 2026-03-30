@@ -65,7 +65,7 @@ GROUNDED_CONTROL_START = 0x0E
 GROUNDED_CONTROL_END = 0x18
 SQUAT_START = 0x27
 SQUAT_END = 0x29
-GROUND_ATTACK_START = 0x2D
+GROUND_ATTACK_START = 0x2C
 GROUND_ATTACK_END = 0x40
 GRAB_STATE = 0xD4
 
@@ -129,69 +129,107 @@ def _is_in_control(state: int) -> bool:
 
 
 def _compute_conversions(p_states, o_states, p_percents, o_percents,
-                         p_stocks, o_stocks, first_gameplay):
+                         p_stocks, o_stocks, first_gameplay,
+                         o_last_attack_landed=None):
     """Compute conversions/openings for player attacking opponent.
 
-    Returns list of dicts with: start_frame, end_frame, damage, did_kill, moves.
+    Follows slippi-js logic:
+    - Start percent uses the previous frame (before the first hit lands)
+    - Damage is accumulated move-by-move via frame-over-frame percent diffs
+    - Reset counter keeps incrementing once started, regardless of state
+    - Reset triggers at > PUNISH_RESET_FRAMES (not >=)
+    - Tracks move count (changes in lastAttackLanded) for conversion rate
     """
     conversions = []
     current = None
     reset_counter = 0
+    move_damage = 0.0
+    move_count = 0
+    last_attack = None
 
     for i in range(first_gameplay, len(o_states)):
         o_state = o_states[i]
         o_stock = o_stocks[i]
 
-        # Check if opponent is being hit
         in_hitlag = _is_damaged(o_state) or _is_grabbed(o_state) or _is_command_grabbed(o_state)
+
+        # Accumulate per-move damage during active conversions
+        if current is not None and i > 0:
+            if o_percents[i] is not None and o_percents[i - 1] is not None:
+                diff = o_percents[i] - o_percents[i - 1]
+                if diff > 0:
+                    move_damage += diff
+
+        # Track moves via lastAttackLanded changes
+        if current is not None and o_last_attack_landed is not None:
+            atk = o_last_attack_landed[i]
+            if atk is not None and atk != last_attack:
+                move_count += 1
+                last_attack = atk
 
         if current is None:
             if in_hitlag:
+                prev_pct = o_percents[i - 1] if i > 0 and o_percents[i - 1] is not None else 0
                 current = {
                     "start_frame": i,
-                    "start_percent": o_percents[i],
+                    "start_percent": prev_pct,
                     "end_frame": i,
-                    "end_percent": o_percents[i],
                     "did_kill": False,
                     "start_stocks": o_stock,
                 }
                 reset_counter = 0
+                move_damage = 0.0
+                move_count = 0
+                last_attack = None
+                # Count damage from this first frame
+                if o_percents[i] is not None:
+                    diff = (o_percents[i] or 0) - (prev_pct or 0)
+                    if diff > 0:
+                        move_damage = diff
+                # Track first move
+                if o_last_attack_landed is not None:
+                    atk = o_last_attack_landed[i]
+                    if atk is not None:
+                        move_count = 1
+                        last_attack = atk
         else:
             if in_hitlag:
                 current["end_frame"] = i
-                current["end_percent"] = o_percents[i]
                 reset_counter = 0
-            elif _is_in_control(o_state):
-                reset_counter += 1
-            elif o_state == 0:  # dead
-                reset_counter += 1
+            else:
+                should_start = reset_counter == 0 and _is_in_control(o_state)
+                should_continue = reset_counter > 0
+                if should_start or should_continue:
+                    reset_counter += 1
 
             # Check for stock loss
             if o_stock is not None and current["start_stocks"] is not None:
                 if o_stock < current["start_stocks"]:
                     current["did_kill"] = True
-                    current["end_percent"] = o_percents[i]
                     current["end_frame"] = i
-                    current["damage"] = (current["end_percent"] or 0) - (current["start_percent"] or 0)
-                    if current["did_kill"]:
-                        # Add the percent from the last stock
-                        current["damage"] = current["end_percent"] or 0
-                        if not current["did_kill"]:
-                            current["damage"] = (current["end_percent"] or 0) - (current["start_percent"] or 0)
+                    current["damage"] = move_damage
+                    current["move_count"] = move_count
                     conversions.append(current)
                     current = None
                     reset_counter = 0
+                    move_damage = 0.0
+                    move_count = 0
+                    last_attack = None
                     continue
 
-            if reset_counter >= PUNISH_RESET_FRAMES:
-                current["damage"] = (current["end_percent"] or 0) - (current["start_percent"] or 0)
+            if reset_counter > PUNISH_RESET_FRAMES:
+                current["damage"] = move_damage
+                current["move_count"] = move_count
                 conversions.append(current)
                 current = None
                 reset_counter = 0
+                move_damage = 0.0
+                move_count = 0
+                last_attack = None
 
-    # Close any remaining conversion
     if current is not None:
-        current["damage"] = (current["end_percent"] or 0) - (current["start_percent"] or 0)
+        current["damage"] = move_damage
+        current["move_count"] = move_count
         conversions.append(current)
 
     return conversions
@@ -200,7 +238,10 @@ def _compute_conversions(p_states, o_states, p_percents, o_percents,
 def _classify_conversions(p_conversions, o_conversions):
     """Classify conversions as neutral_win, counter_attack, or trade.
 
-    Returns (neutral_wins, counter_hits, trades) counts for player.
+    Follows slippi-js logic: track the opponent's most recent conversion
+    end frame. If the opponent was still comboing us when our conversion
+    started, it's a counter-attack. If both start on the same frame, trade.
+    Otherwise, neutral win.
     """
     neutral_wins = 0
     counter_hits = 0
@@ -210,24 +251,31 @@ def _classify_conversions(p_conversions, o_conversions):
     for c in o_conversions:
         o_by_start.setdefault(c["start_frame"], []).append(c)
 
-    # Build a sorted list of opponent conversion end frames for counter-hit detection
+    # Track the latest end frame of any opponent conversion seen so far
+    # Process opponent conversions in start_frame order
     o_sorted = sorted(o_conversions, key=lambda c: c["start_frame"])
+    o_idx = 0
+    last_opp_end_frame = -1
 
-    for conv in p_conversions:
+    # Process player conversions in start_frame order
+    p_sorted = sorted(p_conversions, key=lambda c: c["start_frame"])
+
+    for conv in p_sorted:
         sf = conv["start_frame"]
+
+        # Advance opponent pointer: include all opponent conversions that
+        # started before or at this frame
+        while o_idx < len(o_sorted) and o_sorted[o_idx]["start_frame"] <= sf:
+            last_opp_end_frame = max(last_opp_end_frame, o_sorted[o_idx]["end_frame"])
+            o_idx += 1
 
         # Trade: opponent conversion starts on same frame
         if sf in o_by_start:
             trades += 1
             continue
 
-        # Counter-attack: player was being comboed when this conversion started
-        is_counter = False
-        for oc in o_sorted:
-            if oc["end_frame"] >= sf and oc["start_frame"] < sf:
-                is_counter = True
-                break
-        if is_counter:
+        # Counter-attack: opponent's last conversion hadn't ended yet
+        if last_opp_end_frame > sf:
             counter_hits += 1
             continue
 
@@ -236,8 +284,15 @@ def _classify_conversions(p_conversions, o_conversions):
     return neutral_wins, counter_hits, trades
 
 
-def _compute_action_counts(states, positions_y, first_gameplay):
+def _compute_action_counts(states, positions_y, first_gameplay, state_counters=None):
     """Count defensive and movement actions from action state sequence.
+
+    Follows slippi-js logic:
+    - New action = animation changed OR actionStateCounter reset
+    - Wavedash: frame immediately before LANDING_FALL_SPECIAL must be
+      AIR_DODGE or a jump state (not just anywhere in a lookback window)
+    - Late air dodge filter: if the only unique states in the 15-frame
+      window (including current) are AIR_DODGE and LANDING_FALL_SPECIAL
 
     Returns dict with spot_dodges, air_dodges, rolls, wavedashes, wavelands,
     dash_dances, ledge_grabs.
@@ -258,8 +313,12 @@ def _compute_action_counts(states, positions_y, first_gameplay):
         s = states[i]
         prev = states[i - 1] if i > 0 else None
 
-        # Only count on state transitions
-        if s == prev:
+        # Detect new action: animation changed OR actionStateCounter reset
+        is_new_action = s != prev
+        if not is_new_action and state_counters is not None and i > 0:
+            is_new_action = state_counters[i] < state_counters[i - 1]
+
+        if not is_new_action:
             continue
 
         if s == SPOT_DODGE:
@@ -271,27 +330,32 @@ def _compute_action_counts(states, positions_y, first_gameplay):
         elif s == CLIFF_CATCH:
             counts["ledge_grabs"] += 1
         elif s == LANDING_FALL_SPECIAL:
-            # Possible wavedash/waveland — check lookback window
-            lookback_start = max(first_gameplay, i - WAVEDASH_LOOKBACK)
-            window = states[lookback_start:i]
-
-            had_airdodge = AIR_DODGE in window
-            had_kneebend = KNEE_BEND in window
-
-            if not had_airdodge:
+            # slippi-js: the immediately previous frame must be an
+            # acceptable wavedash initiation animation
+            is_acceptable_prev = (
+                prev == AIR_DODGE
+                or (prev is not None and JUMP_START <= prev <= JUMP_END)
+            )
+            if not is_acceptable_prev:
                 continue
 
-            # Check if it's just a late air dodge (only airdodge + current in window)
+            # Check lookback window for late air dodge filter
+            lookback_start = max(first_gameplay, i - WAVEDASH_LOOKBACK + 1)
+            # Window includes current frame, matching slippi-js .slice(-15)
+            window = states[lookback_start:i + 1]
             unique_in_window = set(window)
-            unique_in_window.discard(s)
-            if unique_in_window == {AIR_DODGE}:
-                continue  # Late air dodge, not wavedash
 
-            # Deduct the air dodge since it's part of wavedash
-            counts["air_dodges"] = max(0, counts["air_dodges"] - 1)
+            # Late air dodge: only AIR_DODGE and LANDING_FALL_SPECIAL in window
+            if unique_in_window == {AIR_DODGE, LANDING_FALL_SPECIAL}:
+                continue
+
+            # slippi-js does NOT deduct air dodges — wavedashes and air dodges
+            # are counted independently
+
+            # Check for knee bend in window to distinguish wavedash vs waveland
+            had_kneebend = KNEE_BEND in window
 
             if had_kneebend:
-                # Check Y movement to distinguish wavedash vs waveland
                 kb_idx = None
                 for j in range(i - 1, lookback_start - 1, -1):
                     if states[j] == KNEE_BEND:
@@ -301,7 +365,6 @@ def _compute_action_counts(states, positions_y, first_gameplay):
                 if kb_idx is not None and positions_y is not None:
                     y_start = positions_y[kb_idx]
                     y_end = positions_y[i]
-                    # Count airborne frames
                     airborne_frames = sum(
                         1 for j in range(kb_idx, i)
                         if JUMP_START <= states[j] <= JUMP_END
@@ -436,12 +499,15 @@ def compute_game_kpis(game_data: dict, player_port: int) -> dict:
     o_stocks_lost = o_stocks_start - o_stocks_final
     max_stocks_lost = max(p_stocks_lost, o_stocks_lost)
 
+    duration_seconds = round(duration_frames / 60, 1)
+
     kpis = {
         "filename": metadata["filename"],
         "character": char_name(player_char),
         "opponent_character": char_name(opp_char),
         "opponent_code": opp_info.get("connect_code"),
         "duration_frames": duration_frames,
+        "duration_seconds": duration_seconds,
         "stocks_lost": p_stocks_lost,
         "stocks_taken": o_stocks_lost,
     }
@@ -475,40 +541,57 @@ def compute_game_kpis(game_data: dict, player_port: int) -> dict:
     p_states = p_post.state.to_pylist()
     o_states = o_post.state.to_pylist()
 
-    # --- Total damage dealt ---
-    # Sum opponent percent increases (resets on stock loss indicate a kill)
-    total_damage = 0.0
-    for i in range(first_gameplay + 1, len(o_pct_list)):
-        if o_pct_list[i] is not None and o_pct_list[i - 1] is not None:
-            diff = o_pct_list[i] - o_pct_list[i - 1]
-            if diff > 0:
-                total_damage += diff
-    kpis["total_damage"] = round(total_damage, 1)
-
     # --- Conversions / Openings ---
+    # lastAttackLanded tracks which move hit the opponent (used for move counting)
+    o_last_atk = o_post.last_attack_landed.to_pylist() if hasattr(o_post, 'last_attack_landed') else None
+    p_last_atk = p_post.last_attack_landed.to_pylist() if hasattr(p_post, 'last_attack_landed') else None
+
     p_conversions = _compute_conversions(
         p_states, o_states, p_pct_list, o_pct_list,
-        p_stocks_list, o_stocks_list, first_gameplay
+        p_stocks_list, o_stocks_list, first_gameplay, o_last_atk
     )
     o_conversions = _compute_conversions(
         o_states, p_states, o_pct_list, p_pct_list,
-        o_stocks_list, p_stocks_list, first_gameplay
+        o_stocks_list, p_stocks_list, first_gameplay, p_last_atk
     )
 
+    # Player conversion stats — matches slippi-js overall.ts
     kill_count = sum(1 for c in p_conversions if c["did_kill"])
     opening_count = len(p_conversions)
-    total_conv_damage = sum(c["damage"] for c in p_conversions)
+    # "Successful conversion" in slippi-js = more than 1 move landed
+    successful_count = sum(1 for c in p_conversions if c.get("move_count", 0) > 1)
+    total_damage = sum(c["damage"] for c in p_conversions)
 
+    kpis["total_damage"] = round(total_damage, 1)
     kpis["kills"] = o_stocks_lost
     kpis["opening_count"] = opening_count
     kpis["conversion_rate"] = (
-        round(kill_count / opening_count * 100, 1) if opening_count > 0 else None
+        round(successful_count / opening_count * 100, 1) if opening_count > 0 else None
     )
     kpis["openings_per_kill"] = (
         round(opening_count / kill_count, 1) if kill_count > 0 else None
     )
     kpis["damage_per_opening"] = (
-        round(total_conv_damage / opening_count, 1) if opening_count > 0 else None
+        round(total_damage / opening_count, 1) if opening_count > 0 else None
+    )
+
+    # Opponent conversion stats
+    opp_kill_count = sum(1 for c in o_conversions if c["did_kill"])
+    opp_opening_count = len(o_conversions)
+    opp_successful_count = sum(1 for c in o_conversions if c.get("move_count", 0) > 1)
+    opp_total_damage = sum(c["damage"] for c in o_conversions)
+
+    kpis["opp_total_damage"] = round(opp_total_damage, 1)
+    kpis["opp_kills"] = p_stocks_lost
+    kpis["opp_opening_count"] = opp_opening_count
+    kpis["opp_conversion_rate"] = (
+        round(opp_successful_count / opp_opening_count * 100, 1) if opp_opening_count > 0 else None
+    )
+    kpis["opp_openings_per_kill"] = (
+        round(opp_opening_count / opp_kill_count, 1) if opp_kill_count > 0 else None
+    )
+    kpis["opp_damage_per_opening"] = (
+        round(opp_total_damage / opp_opening_count, 1) if opp_opening_count > 0 else None
     )
 
     # --- Neutral classification ---
@@ -518,17 +601,39 @@ def compute_game_kpis(game_data: dict, player_port: int) -> dict:
     kpis["neutral_wins"] = neutral_wins
     kpis["counter_hits"] = counter_hits
     kpis["trades"] = trades
+    kpis["opp_neutral_wins"] = o_neutral_wins
+    kpis["opp_counter_hits"] = o_counter_hits
+    kpis["opp_trades"] = o_trades
 
-    # --- L-cancel rate ---
+    # --- L-cancel rate (player) ---
     kpis.update(_lcancel_stats(p_post))
 
-    # --- Action counts (defensive + movement) ---
+    # --- L-cancel rate (opponent) ---
+    opp_lc = _lcancel_stats(o_post)
+    kpis["opp_lcancel_success"] = opp_lc["lcancel_success"]
+    kpis["opp_lcancel_miss"] = opp_lc["lcancel_miss"]
+    kpis["opp_lcancel_rate"] = opp_lc["lcancel_rate"]
+
+    # --- Action counts (player) ---
     p_positions_y = p_post.position.y.to_pylist() if hasattr(p_post.position, 'y') else None
-    action_counts = _compute_action_counts(p_states, p_positions_y, first_gameplay)
+    p_state_counters = p_post.state_age.to_pylist() if hasattr(p_post, 'state_age') else None
+    action_counts = _compute_action_counts(p_states, p_positions_y, first_gameplay, p_state_counters)
     kpis.update(action_counts)
 
-    # --- Input stats ---
+    # --- Action counts (opponent) ---
+    o_positions_y = o_post.position.y.to_pylist() if hasattr(o_post.position, 'y') else None
+    o_state_counters = o_post.state_age.to_pylist() if hasattr(o_post, 'state_age') else None
+    opp_actions = _compute_action_counts(o_states, o_positions_y, first_gameplay, o_state_counters)
+    for k, v in opp_actions.items():
+        kpis[f"opp_{k}"] = v
+
+    # --- Input stats (player) ---
     kpis.update(_compute_inputs(p_pre, first_gameplay, duration_frames))
+
+    # --- Input stats (opponent) ---
+    opp_inputs = _compute_inputs(o_pre, first_gameplay, duration_frames)
+    kpis["opp_inputs_per_minute"] = opp_inputs["inputs_per_minute"]
+    kpis["opp_digital_inputs_per_minute"] = opp_inputs["digital_inputs_per_minute"]
 
     return kpis
 
@@ -579,10 +684,18 @@ def aggregate_by_character(game_kpis: list[dict]) -> dict[str, dict]:
         "spot_dodges", "air_dodges", "rolls", "wavedashes", "wavelands",
         "dash_dances", "ledge_grabs", "inputs_per_minute",
         "digital_inputs_per_minute",
+        # Opponent stats
+        "opp_total_damage", "opp_conversion_rate", "opp_openings_per_kill",
+        "opp_damage_per_opening", "opp_neutral_wins", "opp_counter_hits",
+        "opp_trades", "opp_spot_dodges", "opp_air_dodges", "opp_rolls",
+        "opp_wavedashes", "opp_wavelands", "opp_dash_dances",
+        "opp_ledge_grabs", "opp_inputs_per_minute",
+        "opp_digital_inputs_per_minute",
     ]
 
     for char, group in df.groupby("character"):
         total_lcancels = group["lcancel_success"].sum() + group["lcancel_miss"].sum()
+        opp_total_lcancels = group["opp_lcancel_success"].sum() + group["opp_lcancel_miss"].sum()
 
         agg = {
             "games_played": len(group),
@@ -596,6 +709,11 @@ def aggregate_by_character(game_kpis: list[dict]) -> dict[str, dict]:
             "lcancel_rate": (
                 float(group["lcancel_success"].sum() / total_lcancels)
                 if total_lcancels > 0
+                else None
+            ),
+            "opp_lcancel_rate": (
+                float(group["opp_lcancel_success"].sum() / opp_total_lcancels)
+                if opp_total_lcancels > 0
                 else None
             ),
         }

@@ -19,3 +19,4 @@ include = ["session_dashboard*"]
 
 [project.scripts]
 session-dashboard = "session_dashboard.cli:main"
+session-dashboard-gui = "session_dashboard.gui:main"
