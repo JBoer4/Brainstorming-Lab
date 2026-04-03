@@ -208,7 +208,7 @@ class SessionDashboardApp:
                 for kpis in game_kpis:
                     kpis["player_rating"] = player_rating
                     kpis["player_tier"] = player_tier
-                    opp_code = kpis.get("opponent_code")
+                    opp_code = kpis.get("opp_code")
                     if opp_code:
                         opp_rank = rank_cache.get(opp_code)
                         kpis["opponent_rating"] = opp_rank["rating"] if opp_rank else None

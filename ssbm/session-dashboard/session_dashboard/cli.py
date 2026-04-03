@@ -121,7 +121,7 @@ def main():
             kpis["player_rating"] = player_rating
             kpis["player_tier"] = player_tier
 
-            opp_code = kpis.get("opponent_code")
+            opp_code = kpis.get("opp_code")
             if opp_code:
                 opp_rank = rank_cache.get(opp_code)
                 kpis["opponent_rating"] = opp_rank["rating"] if opp_rank else None
@@ -150,10 +150,10 @@ def main():
               f"Openings/kill: {_p('avg_openings_per_kill')}  "
               f"Dmg/opening: {_p('avg_damage_per_opening')}")
 
-        # Neutral
-        print(f"  Neutral wins: {_p('avg_neutral_wins')}  "
-              f"Counter hits: {_p('avg_counter_hits')}  "
-              f"Trades: {_p('avg_trades')}")
+        # Neutral (ratios: player share of each exchange type, 0–1)
+        print(f"  Neutral win ratio: {_p('avg_neutral_win_ratio')}  "
+              f"Counter hit ratio: {_p('avg_counter_hit_ratio')}  "
+              f"Beneficial trade ratio: {_p('avg_beneficial_trade_ratio')}")
 
         # Defensive
         print(f"  Spot dodges: {_p('avg_spot_dodges')}  "
