@@ -8,7 +8,8 @@ from pathlib import Path
 
 from session_dashboard.parse import load_session, identify_player, get_player_port
 from session_dashboard.kpis import compute_game_kpis, aggregate_by_character, filter_completed_games
-from session_dashboard.export import append_to_history, get_processed_filenames
+from session_dashboard.export import append_to_history, get_processed_filenames, load_history_for_range
+from session_dashboard.report import generate_report
 from session_dashboard.slippi_api import RankCache
 
 
@@ -91,6 +92,12 @@ class SessionDashboardApp:
             text="Force recalculate (reprocess games already in history)",
             variable=self.force_recalc,
         ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(0, 4))
+        self.generate_report = tk.BooleanVar()
+        ttk.Checkbutton(
+            form,
+            text="Generate session report (opens in browser)",
+            variable=self.generate_report,
+        ).grid(row=6, column=0, columnspan=2, sticky="w", pady=(0, 4))
 
         form.columnconfigure(1, weight=1)
 
@@ -159,6 +166,7 @@ class SessionDashboardApp:
         output_path = Path(self.output_dir.get().strip())
         no_ranks = self.no_ranks.get()
         force_recalc = self.force_recalc.get()
+        gen_report = self.generate_report.get()
 
         self.log.configure(state="normal")
         self.log.delete("1.0", "end")
@@ -168,11 +176,11 @@ class SessionDashboardApp:
         self._set_running(True)
         threading.Thread(
             target=self._run_pipeline,
-            args=(replay_path, date_from, date_to, connect_code, output_path, no_ranks, force_recalc),
+            args=(replay_path, date_from, date_to, connect_code, output_path, no_ranks, force_recalc, gen_report),
             daemon=True,
         ).start()
 
-    def _run_pipeline(self, replay_dir, date_from, date_to, connect_code, output_dir, no_ranks, force_recalc):
+    def _run_pipeline(self, replay_dir, date_from, date_to, connect_code, output_dir, no_ranks, force_recalc, gen_report=False):
         try:
             range_desc = (
                 f"{date_from} to {date_to}" if date_from and date_to and date_from != date_to
@@ -333,6 +341,17 @@ class SessionDashboardApp:
 
             history_path = append_to_history(game_kpis, output_dir)
             self._log(f"\nExported to {history_path}")
+
+            if gen_report:
+                import webbrowser
+                games = load_history_for_range(output_dir, date_from, date_to)
+                if not games:
+                    games = game_kpis
+                date_label = date_from if date_from == date_to else f"{date_from}_to_{date_to}"
+                report_path = generate_report(games, output_dir, date_str=date_label)
+                self._log(f"Session report: {report_path}")
+                webbrowser.open(report_path.resolve().as_uri())
+
             self._log("\nDone!")
 
         except Exception as e:

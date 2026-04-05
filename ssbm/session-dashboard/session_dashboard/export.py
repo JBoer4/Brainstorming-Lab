@@ -14,6 +14,36 @@ def get_processed_filenames(output_dir: Path) -> set[str]:
     return set(df["filename"].dropna())
 
 
+def load_history_for_range(
+    output_dir: Path,
+    date_from: str | None,
+    date_to: str | None,
+) -> list[dict]:
+    """Return all games within a date range from game_history.csv.
+
+    Args:
+        output_dir: Directory containing game_history.csv.
+        date_from: Start date (YYYY-MM-DD, inclusive). None = no lower bound.
+        date_to: End date (YYYY-MM-DD, inclusive). None = no upper bound.
+
+    Returns:
+        List of dicts (one per game), or empty list if no data found.
+    """
+    history_path = output_dir / "game_history.csv"
+    if not history_path.exists():
+        return []
+    df = pd.read_csv(history_path)
+    if "session_date" not in df.columns:
+        return []
+    mask = pd.Series([True] * len(df), index=df.index)
+    if date_from:
+        mask &= df["session_date"] >= date_from
+    if date_to:
+        mask &= df["session_date"] <= date_to
+    result = df[mask]
+    return result.where(result.notna(), other=None).to_dict(orient="records")
+
+
 def append_to_history(game_kpis: list[dict], output_dir: Path) -> Path:
     """Append game-level KPIs to a running history CSV.
 

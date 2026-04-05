@@ -309,6 +309,7 @@ def compute_game_stats(game, p_port_idx: int, o_port_idx: int) -> dict:
         "stocks": stocks,
         "overall": [p_overall, o_overall],
         "actionCounts": [p_actions, o_actions],
+        "conversions": conversions,
     }
     return {"settings": settings, "stats": stats}
 

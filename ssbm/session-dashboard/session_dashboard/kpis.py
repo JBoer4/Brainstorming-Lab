@@ -91,6 +91,64 @@ def _ratio_value(ratio_obj: dict | None) -> float | None:
     return ratio_obj.get("ratio")
 
 
+def _best_combo(conversions: list, attacker_idx: int) -> dict:
+    """Find the player's best combo from the conversions list.
+
+    A combo = a conversion where the player is the attacker (opponent is victim).
+    Scored by damage dealt, tiebroken by hit count, then shortest duration.
+
+    Returns a dict with keys: damage, hits, start_frame, duration_frames.
+    All values None if no qualifying combo found.
+    """
+    player_combos = [
+        c for c in conversions
+        if c.get("playerIndex") != attacker_idx  # playerIndex = victim, so attacker = not victim
+        and c.get("moves")
+        and any(m["playerIndex"] == attacker_idx for m in c["moves"])
+    ]
+
+    if not player_combos:
+        return {"damage": None, "hits": None, "start_frame": None, "duration_frames": None}
+
+    def _combo_damage(c):
+        return (c.get("currentPercent") or c.get("endPercent") or 0) - (c.get("startPercent") or 0)
+
+    def _combo_hits(c):
+        return sum(m.get("hitCount", 1) for m in c["moves"] if m["playerIndex"] == attacker_idx)
+
+    def _combo_duration(c):
+        if c.get("endFrame") is not None and c.get("startFrame") is not None:
+            return c["endFrame"] - c["startFrame"]
+        return float("inf")
+
+    best = max(
+        player_combos,
+        key=lambda c: (_combo_damage(c), _combo_hits(c), -_combo_duration(c)),
+    )
+    return {
+        "damage": round(_combo_damage(best), 1),
+        "hits": _combo_hits(best),
+        "start_frame": best.get("startFrame"),
+        "duration_frames": _combo_duration(best) if _combo_duration(best) != float("inf") else None,
+    }
+
+
+def _combo_density(conversions: list, attacker_idx: int, duration_seconds: float) -> float | None:
+    """Total damage from multi-hit combos (2+ moves by attacker) per minute of game time."""
+    if not duration_seconds:
+        return None
+    multi_hit = [
+        c for c in conversions
+        if c.get("playerIndex") != attacker_idx
+        and sum(m.get("hitCount", 1) for m in c.get("moves", []) if m["playerIndex"] == attacker_idx) >= 2
+    ]
+    total_dmg = sum(
+        (c.get("currentPercent") or c.get("endPercent") or 0) - (c.get("startPercent") or 0)
+        for c in multi_hit
+    )
+    return round(total_dmg / (duration_seconds / 60), 1) if total_dmg else 0.0
+
+
 def _lcancel_from_actions(actions: dict) -> dict:
     lc = actions.get("lCancelCount") or {}
     success = lc.get("success", 0)
@@ -260,6 +318,17 @@ def compute_game_kpis(game_data: dict, player_port: int) -> dict:
     kpis["opp_lcancel_success"] = o_lc["lcancel_success"]
     kpis["opp_lcancel_miss"]    = o_lc["lcancel_miss"]
     kpis["opp_lcancel_rate"]    = o_lc["lcancel_rate"]
+
+    # ----------------------------------------------------------------
+    # COMBO TRACKING
+    # ----------------------------------------------------------------
+    conversions = stats.get("conversions") or []
+    combo = _best_combo(conversions, player_idx)
+    kpis["best_combo_damage"]        = combo["damage"]
+    kpis["best_combo_hits"]          = combo["hits"]
+    kpis["best_combo_start_frame"]   = combo["start_frame"]
+    kpis["best_combo_duration_frames"] = combo["duration_frames"]
+    kpis["combo_density"] = _combo_density(conversions, player_idx, kpis["duration_seconds"])
 
     return kpis
 

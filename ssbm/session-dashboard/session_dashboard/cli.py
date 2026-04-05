@@ -6,13 +6,27 @@ from pathlib import Path
 
 from .parse import load_session, identify_player, get_player_port
 from .kpis import compute_game_kpis, aggregate_by_character, filter_completed_games
-from .export import append_to_history, get_processed_filenames
+from .export import append_to_history, get_processed_filenames, load_history_for_range
+from .report import generate_report
 from .slippi_api import RankCache
 
 
 def _display_code(code: str) -> str:
     """Replace Slippi's full-width ＃ with standard # for terminal display."""
     return code.replace("\uFF03", "#") if code else code
+
+
+def _generate_report_from_history(output_dir, date_from, date_to):
+    import webbrowser
+    games = load_history_for_range(output_dir, date_from, date_to)
+    if not games:
+        label = date_from or "the requested date"
+        print(f"No data in history for {label}.")
+        return
+    date_label = date_from if date_from == date_to else f"{date_from}_to_{date_to}"
+    report_path = generate_report(games, output_dir, date_str=date_label)
+    print(f"Session report: {report_path}")
+    webbrowser.open(report_path.resolve().as_uri())
 
 
 def main():
@@ -69,6 +83,11 @@ def main():
         action="store_true",
         help="Reprocess games already in game_history.csv (default: skip them).",
     )
+    parser.add_argument(
+        "--report",
+        action="store_true",
+        help="Generate and open a session HTML report after processing.",
+    )
     args = parser.parse_args()
 
     # --date is shorthand for a single-day range
@@ -112,7 +131,11 @@ def main():
             print(f"Warning: skipping {game['metadata']['filename']}: {e}")
 
     if not game_kpis:
-        print("No games could be analyzed.")
+        if args.report:
+            print("No new games to process — generating report from history.")
+            _generate_report_from_history(args.output, date_from, date_to)
+        else:
+            print("No new games to process.")
         return
 
     game_kpis, filtered_count = filter_completed_games(game_kpis)
@@ -121,7 +144,11 @@ def main():
               f"(<600 frames or <3 stocks lost by either player).")
 
     if not game_kpis:
-        print("No completed games to analyze.")
+        if args.report:
+            print("No completed games to analyze — generating report from history.")
+            _generate_report_from_history(args.output, date_from, date_to)
+        else:
+            print("No completed games to analyze.")
         return
 
     print(f"Analyzing {len(game_kpis)} completed games.")
@@ -197,6 +224,9 @@ def main():
 
     history_path = append_to_history(game_kpis, args.output)
     print(f"\nExported to {history_path}")
+
+    if args.report:
+        _generate_report_from_history(args.output, date_from, date_to)
 
 
 if __name__ == "__main__":
