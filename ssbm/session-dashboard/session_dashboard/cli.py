@@ -6,8 +6,8 @@ from pathlib import Path
 
 from .parse import load_session, identify_player, get_player_port
 from .kpis import compute_game_kpis, aggregate_by_character, filter_completed_games
-from .export import export_session, append_to_history
-from .slippi_api import RankCache, rating_to_tier
+from .export import append_to_history, get_processed_filenames
+from .slippi_api import RankCache
 
 
 def _display_code(code: str) -> str:
@@ -27,16 +27,31 @@ def main():
         help="Directory containing .slp replay files (default: ~/Documents/Slippi)",
     )
     parser.add_argument(
+        "--from",
+        dest="date_from",
+        type=str,
+        default=None,
+        help="Start date (YYYY-MM-DD, inclusive). Omit for all files.",
+    )
+    parser.add_argument(
+        "--to",
+        dest="date_to",
+        type=str,
+        default=None,
+        help="End date (YYYY-MM-DD, inclusive). Defaults to --from if only that is set.",
+    )
+    parser.add_argument(
         "--date",
         type=str,
-        default=date.today().isoformat(),
-        help="Date to analyze (YYYY-MM-DD). Defaults to today.",
+        default=None,
+        help="Shorthand for --from DATE --to DATE (single day).",
     )
     parser.add_argument(
         "--connect-code",
         type=str,
         default=None,
-        help="Your Slippi connect code (e.g. ABCD#123) for player identification.",
+        help="Your Slippi connect code(s). Comma-separate multiple codes for alts "
+             "(e.g. JOJO#821,ALT#420).",
     )
     parser.add_argument(
         "--output",
@@ -49,28 +64,49 @@ def main():
         action="store_true",
         help="Skip Slippi API rank lookups (offline mode).",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Reprocess games already in game_history.csv (default: skip them).",
+    )
     args = parser.parse_args()
 
-    print(f"Loading replays from {args.replay_dir} for {args.date}...")
-    games = load_session(args.replay_dir, date_filter=args.date)
+    # --date is shorthand for a single-day range
+    date_from = args.date or args.date_from
+    date_to = args.date or args.date_to
+
+    range_desc = (
+        f"{date_from} to {date_to}" if date_from and date_to and date_from != date_to
+        else date_from or "all dates"
+    )
+    skip_filenames = None if args.force else get_processed_filenames(args.output)
+    if skip_filenames:
+        print(f"{len(skip_filenames)} games already in history — skipping (use --force to reprocess).")
+
+    print(f"Loading replays from {args.replay_dir} ({range_desc})...")
+    games = load_session(args.replay_dir, date_from=date_from, date_to=date_to, skip_filenames=skip_filenames)
 
     if not games:
-        print(f"No replays found for {args.date}.")
+        print(f"No replays found for {range_desc}.")
         return
 
     print(f"Found {len(games)} games.")
 
-    # Identify player by connect code
-    player_code = identify_player(games, connect_code=args.connect_code)
-    print(f"Identified player: {_display_code(player_code)}")
+    connect_codes = (
+        [c.strip() for c in args.connect_code.split(",")]
+        if args.connect_code else None
+    )
+    player_codes = identify_player(games, connect_codes=connect_codes)
+    print(f"Identified player: {', '.join(_display_code(c) for c in player_codes)}")
 
-    # Compute KPIs per game (port can change between games)
     game_kpis = []
     for game in games:
         try:
-            player_port = get_player_port(game, player_code)
+            player_port, matched_code = get_player_port(game, player_codes)
             kpis = compute_game_kpis(game, player_port)
-            kpis["session_date"] = args.date
+            kpis["session_date"] = game["metadata"]["file_date"]
+            kpis["game_timestamp"] = game["metadata"]["game_timestamp"]
+            kpis["player_code"] = _display_code(matched_code)
             game_kpis.append(kpis)
         except Exception as e:
             print(f"Warning: skipping {game['metadata']['filename']}: {e}")
@@ -79,7 +115,6 @@ def main():
         print("No games could be analyzed.")
         return
 
-    # Filter out incomplete games
     game_kpis, filtered_count = filter_completed_games(game_kpis)
     if filtered_count:
         print(f"Filtered out {filtered_count} incomplete games "
@@ -91,35 +126,35 @@ def main():
 
     print(f"Analyzing {len(game_kpis)} completed games.")
 
-    # Look up ranked ratings for all players
     if not args.no_ranks:
         rank_cache = RankCache()
+        upper_player_codes = {c.upper() for c in player_codes}
 
-        # Look up the player's own rank
-        player_rank = rank_cache.get(player_code)
-        player_rating = player_rank["rating"] if player_rank else None
-        player_tier = player_rank["tier"] if player_rank else None
+        # Look up rank for each of the player's codes
+        rank_cache.prefetch(set(player_codes))
+        player_ranks = {c: rank_cache.get(c) for c in player_codes}
+        for c, rank in player_ranks.items():
+            if rank and rank.get("rating") is not None:
+                print(f"Your rank ({_display_code(c)}): {rank['tier']} ({rank['rating']:.0f})")
+            else:
+                print(f"Your rank ({_display_code(c)}): {rank['tier'] if rank else 'Unknown'}")
 
-        # Collect unique opponent codes from the games
+        # Collect unique opponent codes (excluding all player codes)
         opp_codes = set()
         for game in games:
             for player in game["metadata"]["players"]:
-                if player["connect_code"] and player["connect_code"] != player_code:
+                if player["connect_code"] and player["connect_code"].upper() not in upper_player_codes:
                     opp_codes.add(player["connect_code"])
 
-        # Pre-fetch all opponent ranks concurrently
         rank_cache.prefetch(opp_codes)
-
         print(f"Looked up ranks for {rank_cache.api_calls_made} players.")
-        if player_rating is not None:
-            print(f"Your rank: {player_tier} ({player_rating:.0f})")
-        else:
-            print(f"Your rank: {player_tier}")
 
-        # Attach rank data to each game's KPIs
+        # Attach rank for the specific code used in each game
+        player_ranks_by_display = {_display_code(c): r for c, r in player_ranks.items()}
         for kpis in game_kpis:
-            kpis["player_rating"] = player_rating
-            kpis["player_tier"] = player_tier
+            rank = player_ranks_by_display.get(kpis.get("player_code"))
+            kpis["player_rating"] = rank["rating"] if rank else None
+            kpis["player_tier"] = rank["tier"] if rank else None
 
             opp_code = kpis.get("opp_code")
             if opp_code:
@@ -130,10 +165,8 @@ def main():
                 kpis["opponent_rating"] = None
                 kpis["opponent_tier"] = None
 
-    # Aggregate by character
     aggregates = aggregate_by_character(game_kpis)
 
-    # Print quick summary
     for char, data in aggregates.items():
         s = data["summary"]
         lc_str = f"{s['lcancel_rate']:.0%}" if s["lcancel_rate"] else "N/A"
@@ -143,42 +176,27 @@ def main():
         print(f"  Avg stocks taken: {s['avg_stocks_taken']:.1f}  "
               f"lost: {s['avg_stocks_lost']:.1f}")
 
-        # Combat
         _p = lambda k: s.get(k) if s.get(k) is not None else "N/A"
         print(f"  Damage/game: {_p('avg_total_damage')}  "
               f"Conversion rate: {_p('avg_conversion_rate')}%  "
               f"Openings/kill: {_p('avg_openings_per_kill')}  "
               f"Dmg/opening: {_p('avg_damage_per_opening')}")
-
-        # Neutral (ratios: player share of each exchange type, 0–1)
         print(f"  Neutral win ratio: {_p('avg_neutral_win_ratio')}  "
               f"Counter hit ratio: {_p('avg_counter_hit_ratio')}  "
               f"Beneficial trade ratio: {_p('avg_beneficial_trade_ratio')}")
-
-        # Defensive
         print(f"  Spot dodges: {_p('avg_spot_dodges')}  "
               f"Air dodges: {_p('avg_air_dodges')}  "
               f"Rolls: {_p('avg_rolls')}")
-
-        # Movement
         print(f"  Wavedashes: {_p('avg_wavedashes')}  "
               f"Wavelands: {_p('avg_wavelands')}  "
               f"Dash dances: {_p('avg_dash_dances')}  "
               f"Ledge grabs: {_p('avg_ledge_grabs')}")
-
-        # Inputs
         print(f"  L-cancel: {lc_str}  "
               f"IPM: {_p('avg_inputs_per_minute')}  "
               f"Digital IPM: {_p('avg_digital_inputs_per_minute')}")
 
-    # Export CSVs
-    created = export_session(game_kpis, aggregates, args.output, args.date)
     history_path = append_to_history(game_kpis, args.output)
-    created.append(history_path)
-
-    print(f"\nExported {len(created)} files to {args.output}/")
-    for p in created:
-        print(f"  {p.name}")
+    print(f"\nExported to {history_path}")
 
 
 if __name__ == "__main__":

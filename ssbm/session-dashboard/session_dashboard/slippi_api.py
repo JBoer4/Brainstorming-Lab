@@ -1,5 +1,6 @@
 """Look up player ranked data from Slippi's GraphQL API."""
 
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
@@ -68,28 +69,39 @@ def _normalize_code_for_api(code: str) -> str:
     return code.upper()
 
 
-def lookup_player(connect_code: str) -> dict | None:
+def lookup_player(connect_code: str, _retries: int = 3) -> dict | None:
     """Look up a player's ranked data by connect code.
 
     Returns a dict with rating, tier, wins, losses, etc.
     Returns None if the player doesn't exist or has no ranked profile.
+    Retries with exponential backoff on 429 rate-limit responses.
     """
     code = _normalize_code_for_api(connect_code)
 
-    try:
-        resp = requests.post(
-            SLIPPI_GQL_URL,
-            json={
-                "operationName": "UserProfilePageQuery",
-                "query": PROFILE_QUERY,
-                "variables": {"cc": code, "uid": code},
-            },
-            headers={"content-type": "application/json"},
-            timeout=10,
-        )
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        print(f"Warning: Slippi API request failed for {code}: {e}")
+    for attempt in range(_retries):
+        try:
+            resp = requests.post(
+                SLIPPI_GQL_URL,
+                json={
+                    "operationName": "UserProfilePageQuery",
+                    "query": PROFILE_QUERY,
+                    "variables": {"cc": code, "uid": code},
+                },
+                headers={"content-type": "application/json"},
+                timeout=10,
+            )
+            if resp.status_code == 429:
+                wait = 2 ** attempt  # 1s, 2s, 4s
+                print(f"Rate limited by Slippi API — waiting {wait}s before retry...")
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            break
+        except requests.RequestException as e:
+            print(f"Warning: Slippi API request failed for {code}: {e}")
+            return None
+    else:
+        print(f"Warning: Slippi API rate limit not resolved after {_retries} retries for {code}")
         return None
 
     data = resp.json()
@@ -139,7 +151,7 @@ class RankCache:
         }
         if not codes_to_fetch:
             return
-        with ThreadPoolExecutor(max_workers=8) as pool:
+        with ThreadPoolExecutor(max_workers=4) as pool:
             futures = {pool.submit(lookup_player, c): c for c in codes_to_fetch}
             for future in as_completed(futures):
                 code = futures[future]

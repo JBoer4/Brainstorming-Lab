@@ -8,7 +8,7 @@ from pathlib import Path
 
 from session_dashboard.parse import load_session, identify_player, get_player_port
 from session_dashboard.kpis import compute_game_kpis, aggregate_by_character, filter_completed_games
-from session_dashboard.export import export_session, append_to_history
+from session_dashboard.export import append_to_history, get_processed_filenames
 from session_dashboard.slippi_api import RankCache
 
 
@@ -21,6 +21,8 @@ class SessionDashboardApp:
         self.root = root
         root.title("Session Dashboard")
         root.resizable(False, False)
+
+        self._cancel_event = threading.Event()
 
         # --- Input frame ---
         form = ttk.LabelFrame(root, text="Session Settings", padding=12)
@@ -39,22 +41,30 @@ class SessionDashboardApp:
         ttk.Button(dir_frame, text="Browse...", command=self._browse_dir).pack(
             side="left", padx=(6, 0)
         )
-
-        # Date
-        ttk.Label(form, text="Date:").grid(row=1, column=0, sticky="w", pady=4)
-        self.session_date = tk.StringVar(value=date.today().isoformat())
-        ttk.Entry(form, textvariable=self.session_date, width=14).grid(
-            row=1, column=1, sticky="w", pady=4
+        ttk.Label(form, text="Point at root folder — YYYY-MM subfolders auto-detected", foreground="gray").grid(
+            row=0, column=2, sticky="w", padx=(8, 0)
         )
 
-        # Connect code
-        ttk.Label(form, text="Connect Code:").grid(
+        # Date range
+        ttk.Label(form, text="From:").grid(row=1, column=0, sticky="w", pady=4)
+        date_frame = ttk.Frame(form)
+        date_frame.grid(row=1, column=1, sticky="w", pady=4)
+        self.date_from = tk.StringVar(value=date.today().isoformat())
+        ttk.Entry(date_frame, textvariable=self.date_from, width=14).pack(side="left")
+        ttk.Label(date_frame, text="  To:").pack(side="left")
+        self.date_to = tk.StringVar(value=date.today().isoformat())
+        ttk.Entry(date_frame, textvariable=self.date_to, width=14).pack(side="left", padx=(4, 0))
+        ttk.Label(date_frame, text="  (leave blank for all dates)", foreground="gray").pack(side="left")
+
+        # Connect code(s)
+        ttk.Label(form, text="Connect Code(s):").grid(
             row=2, column=0, sticky="w", pady=4
         )
+        code_frame = ttk.Frame(form)
+        code_frame.grid(row=2, column=1, sticky="w", pady=4)
         self.connect_code = tk.StringVar()
-        ttk.Entry(form, textvariable=self.connect_code, width=14).grid(
-            row=2, column=1, sticky="w", pady=4
-        )
+        ttk.Entry(code_frame, textvariable=self.connect_code, width=28).pack(side="left")
+        ttk.Label(code_frame, text="  (comma-separate alts: JOJO#821, ALT#420)", foreground="gray").pack(side="left")
 
         # Output directory
         ttk.Label(form, text="Output Folder:").grid(
@@ -70,17 +80,27 @@ class SessionDashboardApp:
             side="left", padx=(6, 0)
         )
 
-        # Skip ranks checkbox
+        # Options
         self.no_ranks = tk.BooleanVar()
         ttk.Checkbutton(form, text="Skip rank lookups (faster)", variable=self.no_ranks).grid(
-            row=4, column=0, columnspan=2, sticky="w", pady=4
+            row=4, column=0, columnspan=2, sticky="w", pady=(4, 0)
         )
+        self.force_recalc = tk.BooleanVar()
+        ttk.Checkbutton(
+            form,
+            text="Force recalculate (reprocess games already in history)",
+            variable=self.force_recalc,
+        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(0, 4))
 
         form.columnconfigure(1, weight=1)
 
-        # --- Run button ---
-        self.run_btn = ttk.Button(root, text="Run", command=self._run)
-        self.run_btn.pack(pady=8)
+        # --- Run / Stop buttons ---
+        btn_frame = ttk.Frame(root)
+        btn_frame.pack(pady=8)
+        self.run_btn = ttk.Button(btn_frame, text="Run", command=self._run)
+        self.run_btn.pack(side="left", padx=4)
+        self.stop_btn = ttk.Button(btn_frame, text="Stop", command=self._cancel, state="disabled")
+        self.stop_btn.pack(side="left", padx=4)
 
         # --- Log output ---
         log_frame = ttk.LabelFrame(root, text="Output", padding=8)
@@ -91,6 +111,9 @@ class SessionDashboardApp:
         self.log.configure(yscrollcommand=scrollbar.set)
         self.log.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
+
+        # Ctrl+C cancels a running pipeline
+        root.bind("<Control-c>", lambda e: self._cancel())
 
     def _browse_dir(self):
         path = filedialog.askdirectory(title="Select Replay Folder")
@@ -114,10 +137,13 @@ class SessionDashboardApp:
     def _set_running(self, running: bool):
         def _update():
             self.run_btn.configure(state="disabled" if running else "normal")
+            self.stop_btn.configure(state="normal" if running else "disabled")
         self.root.after(0, _update)
 
+    def _cancel(self):
+        self._cancel_event.set()
+
     def _run(self):
-        # Validate inputs
         replay_dir = self.replay_dir.get().strip()
         if not replay_dir:
             self._log("Error: Please select a replay folder.")
@@ -127,43 +153,84 @@ class SessionDashboardApp:
             self._log(f"Error: Folder not found: {replay_dir}")
             return
 
-        session_date = self.session_date.get().strip()
+        date_from = self.date_from.get().strip() or None
+        date_to = self.date_to.get().strip() or None
         connect_code = self.connect_code.get().strip() or None
         output_path = Path(self.output_dir.get().strip())
         no_ranks = self.no_ranks.get()
+        force_recalc = self.force_recalc.get()
 
-        # Clear log
         self.log.configure(state="normal")
         self.log.delete("1.0", "end")
         self.log.configure(state="disabled")
 
+        self._cancel_event.clear()
         self._set_running(True)
         threading.Thread(
             target=self._run_pipeline,
-            args=(replay_path, session_date, connect_code, output_path, no_ranks),
+            args=(replay_path, date_from, date_to, connect_code, output_path, no_ranks, force_recalc),
             daemon=True,
         ).start()
 
-    def _run_pipeline(self, replay_dir, session_date, connect_code, output_dir, no_ranks):
+    def _run_pipeline(self, replay_dir, date_from, date_to, connect_code, output_dir, no_ranks, force_recalc):
         try:
-            self._log(f"Loading replays from {replay_dir} for {session_date}...")
-            games = load_session(replay_dir, date_filter=session_date)
+            range_desc = (
+                f"{date_from} to {date_to}" if date_from and date_to and date_from != date_to
+                else date_from or "all dates"
+            )
+            self._log(f"Loading replays from {replay_dir} ({range_desc})...")
+
+            skip_filenames = None
+            if not force_recalc:
+                skip_filenames = get_processed_filenames(output_dir)
+                if skip_filenames:
+                    self._log(f"  {len(skip_filenames)} games already in history — will skip.")
+
+            _last_progress = [0]
+            def _parse_progress(current, total):
+                pct = int(current / total * 100)
+                milestone = pct // 25
+                if milestone > _last_progress[0]:
+                    _last_progress[0] = milestone
+                    self._log(f"  Parsing files... {current}/{total}")
+
+            games = load_session(
+                replay_dir, date_from=date_from, date_to=date_to,
+                on_progress=_parse_progress,
+                skip_filenames=skip_filenames,
+            )
 
             if not games:
-                self._log(f"No replays found for {session_date}.")
+                self._log(f"No replays found for {range_desc}.")
                 return
 
             self._log(f"Found {len(games)} games.")
 
-            player_code = identify_player(games, connect_code=connect_code)
-            self._log(f"Identified player: {_display_code(player_code)}")
+            if self._cancel_event.is_set():
+                self._log("Cancelled.")
+                return
+
+            connect_codes = (
+                [c.strip() for c in connect_code.split(",")]
+                if connect_code else None
+            )
+            player_codes = identify_player(games, connect_codes=connect_codes)
+            self._log(f"Identified player: {', '.join(_display_code(c) for c in player_codes)}")
 
             game_kpis = []
-            for game in games:
+            total = len(games)
+            for i, game in enumerate(games):
+                if self._cancel_event.is_set():
+                    self._log(f"Cancelled after {len(game_kpis)} games.")
+                    break
+                if total > 20 and i > 0 and i % 10 == 0:
+                    self._log(f"  Computing KPIs... ({i}/{total})")
                 try:
-                    player_port = get_player_port(game, player_code)
+                    player_port, matched_code = get_player_port(game, player_codes)
                     kpis = compute_game_kpis(game, player_port)
-                    kpis["session_date"] = session_date
+                    kpis["session_date"] = game["metadata"]["file_date"]
+                    kpis["game_timestamp"] = game["metadata"]["game_timestamp"]
+                    kpis["player_code"] = _display_code(matched_code)
                     game_kpis.append(kpis)
                 except Exception as e:
                     self._log(f"Warning: skipping {game['metadata']['filename']}: {e}")
@@ -185,29 +252,33 @@ class SessionDashboardApp:
 
             self._log(f"Analyzing {len(game_kpis)} completed games.")
 
-            if not no_ranks:
+            if not no_ranks and not self._cancel_event.is_set():
+                self._log("Looking up ranks...")
                 rank_cache = RankCache()
-                player_rank = rank_cache.get(player_code)
-                player_rating = player_rank["rating"] if player_rank else None
-                player_tier = player_rank["tier"] if player_rank else None
+                upper_player_codes = {c.upper() for c in player_codes}
+
+                rank_cache.prefetch(set(player_codes))
+                player_ranks = {c: rank_cache.get(c) for c in player_codes}
+                for c, rank in player_ranks.items():
+                    if rank and rank.get("rating") is not None:
+                        self._log(f"Your rank ({_display_code(c)}): {rank['tier']} ({rank['rating']:.0f})")
+                    else:
+                        self._log(f"Your rank ({_display_code(c)}): {rank['tier'] if rank else 'Unknown'}")
 
                 opp_codes = set()
                 for game in games:
                     for player in game["metadata"]["players"]:
-                        if player["connect_code"] and player["connect_code"] != player_code:
+                        if player["connect_code"] and player["connect_code"].upper() not in upper_player_codes:
                             opp_codes.add(player["connect_code"])
 
                 rank_cache.prefetch(opp_codes)
                 self._log(f"Looked up ranks for {rank_cache.api_calls_made} players.")
 
-                if player_rating is not None:
-                    self._log(f"Your rank: {player_tier} ({player_rating:.0f})")
-                else:
-                    self._log(f"Your rank: {player_tier}")
-
+                player_ranks_by_display = {_display_code(c): r for c, r in player_ranks.items()}
                 for kpis in game_kpis:
-                    kpis["player_rating"] = player_rating
-                    kpis["player_tier"] = player_tier
+                    rank = player_ranks_by_display.get(kpis.get("player_code"))
+                    kpis["player_rating"] = rank["rating"] if rank else None
+                    kpis["player_tier"] = rank["tier"] if rank else None
                     opp_code = kpis.get("opp_code")
                     if opp_code:
                         opp_rank = rank_cache.get(opp_code)
@@ -260,14 +331,8 @@ class SessionDashboardApp:
                     f"Digital IPM: {_p('avg_digital_inputs_per_minute')}"
                 )
 
-            created = export_session(game_kpis, aggregates, output_dir, session_date)
             history_path = append_to_history(game_kpis, output_dir)
-            created.append(history_path)
-
-            self._log(f"\nExported {len(created)} files to {output_dir}/")
-            for p in created:
-                self._log(f"  {p.name}")
-
+            self._log(f"\nExported to {history_path}")
             self._log("\nDone!")
 
         except Exception as e:
