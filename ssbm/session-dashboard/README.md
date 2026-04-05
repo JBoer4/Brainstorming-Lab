@@ -22,7 +22,7 @@ Two dashboards included in `dashboard/SessionDashboard.twb`:
 ## Usage
 
 ### GUI
-Run `dist/SessionDashboard.exe` (Windows).
+Download `SessionDashboard.exe` from the [latest release](https://github.com/JBoer4/Brainstorming-Lab/releases/tag/v0.1.0-beta) (Windows).
 
 - Point at your replay folder (supports `YYYY-MM` monthly subfolders — point at the root)
 - Set a date range, or leave blank to process everything
