@@ -1,0 +1,12 @@
+# Trigger when price is within this % above the 200-week moving average.
+# Set to 0 for strict (price must be at or below the MA).
+# Set to 100 temporarily to force all stocks to trigger (useful for testing email).
+threshold_pct: 5
+
+watchlist:
+  - AAPL
+  - AMZN
+  - GOOGL
+  - MSFT
+  - WMT
+  - META
