@@ -11,6 +11,8 @@ notes.md
 server-data/
 .venv/
 *.egg-info/
+build/
+dist/
 node_modules/
 *.pem
 
