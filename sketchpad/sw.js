@@ -3,7 +3,7 @@
 //    updates apply on a normal reload with no hard-refresh needed.
 //  - Offline -> serve the last cached copy, so the installed app still runs with
 //    no network.
-const CACHE_NAME = 'sketchpad-v6';
+const CACHE_NAME = 'sketchpad-v9';
 
 const ASSETS = [
   './',
@@ -16,6 +16,7 @@ const ASSETS = [
   './js/backgrounds.js',
   './js/storage.js',
   './js/pdf.js',
+  './js/svg.js',
   './js/vendor/jspdf.umd.min.js',
 ];
 
@@ -46,14 +47,24 @@ self.addEventListener('fetch', (event) => {
 
   event.respondWith(
     fetch(req)
-      .then((res) => {
+      .then(async (res) => {
         if (res && res.ok) {
           const clone = res.clone();
           caches.open(CACHE_NAME).then((c) => c.put(req, clone));
+          return res;
+        }
+        // Non-OK response (e.g. a 404 because Pages is turned off): fall back to
+        // the cached app rather than surfacing GitHub's error page.
+        const cached = await caches.match(req);
+        if (cached) return cached;
+        if (req.mode === 'navigate') {
+          const shell = await caches.match('./index.html');
+          if (shell) return shell;
         }
         return res;
       })
       .catch(async () => {
+        // Network error / fully offline: serve from cache.
         const cached = await caches.match(req);
         if (cached) return cached;
         if (req.mode === 'navigate') return caches.match('./index.html');

@@ -13,6 +13,7 @@
 // redraw keeps an infinite, freely-panned canvas simple and correct.
 
 import { drawBackground } from './backgrounds.js';
+import { buildSVG } from './svg.js';
 
 const RENDER_SCALE = 2;   // export supersampling for crisp lines
 const MIN_SCALE = 0.1;
@@ -669,6 +670,19 @@ export class CanvasEngine {
     for (const s of this.strokes) this._paintStroke(ctx, s);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     return out;
+  }
+
+  // Scalable vector export (one-way image). Returns an SVG string, or null if
+  // the board is empty.
+  toSVG(includeBackground) {
+    const bounds = this._contentBounds();
+    if (!bounds) return null;
+    return buildSVG(this.strokes, bounds, {
+      background: this.background,
+      bgColor: this.bgColor,
+      patternOpacity: this.patternOpacity,
+      includeBackground,
+    });
   }
 }
 

@@ -12,7 +12,8 @@ it's a handful of static files and all your work stays on the device.
 - Undo / redo
 - Optional **pressure sensitivity** (off by default — toggle it on for calligraphic strokes)
 - Backgrounds: **blank**, **grid**, **dots** + adjustable **background color**
-- **Export** to **PDF / PNG / JPG** (sized to your drawing's bounds, high resolution)
+- **Export** to **PDF / PNG / JPG / SVG** (sized to your drawing's bounds; SVG is scalable vector)
+- **Save / load `.sketch` files** to move an editable board between devices
 - On-device **document library** (auto-saved to IndexedDB)
 
 ## Input model (tablet)

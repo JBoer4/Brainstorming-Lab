@@ -241,9 +241,17 @@ exportMenu.querySelectorAll('.menu-item').forEach((btn) => {
     const includeBg = $('include-bg').checked;
     if (btn.dataset.fmt === 'pdf') exportPDF(engine, name, includeBg);
     else if (btn.dataset.fmt === 'sketch') exportDocFile(currentDoc);
+    else if (btn.dataset.fmt === 'svg') exportSVG(name, includeBg);
     else exportImage(name, btn.dataset.fmt, includeBg);
   });
 });
+
+function exportSVG(name, includeBg) {
+  const svg = engine.toSVG(includeBg);
+  if (!svg) { alert('Nothing to export yet — draw something first.'); return; }
+  const safe = (name || 'sketch').replace(/[^\w\-. ]+/g, '_').trim() || 'sketch';
+  downloadFile(safe + '.svg', svg, 'image/svg+xml');
+}
 
 // ---------- .sketch files (editable, transfer between devices) ----------
 function exportDocFile(doc) {
