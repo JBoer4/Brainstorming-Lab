@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#1e1e24" />
+  <title>Sketchpad</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icon.svg" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Top toolbar -->
+  <header id="toolbar">
+    <button class="tb-btn" id="btn-library" title="Documents">☰</button>
+    <input id="doc-name" class="doc-name" type="text" value="Untitled" spellcheck="false" />
+
+    <span class="tb-sep"></span>
+
+    <div class="tool-group" role="group" aria-label="Tools">
+      <button class="tb-btn tool" data-tool="pen" title="Pen">✏️</button>
+      <button class="tb-btn tool" data-tool="erase" title="True eraser (erases pixels)">⬜</button>
+      <button class="tb-btn tool" data-tool="stroke-erase" title="Stroke eraser (deletes whole strokes)">✂️</button>
+      <button class="tb-btn tool" data-tool="hand" title="Hand (drag to pan)">✋</button>
+    </div>
+
+    <div class="tool-group" role="group" aria-label="Shapes">
+      <button class="tb-btn tool" data-tool="line" title="Line">／</button>
+      <button class="tb-btn tool" data-tool="rect" title="Rectangle">▭</button>
+      <button class="tb-btn tool" data-tool="ellipse" title="Ellipse / circle">◯</button>
+    </div>
+
+    <span class="tb-sep"></span>
+
+    <label class="color-wrap" title="Color">
+      <input type="color" id="color-input" value="#111318" />
+      <span class="color-dot" id="color-dot"></span>
+    </label>
+    <div id="recent-colors" class="recent-colors"></div>
+
+    <label class="size-wrap" title="Brush size">
+      <span class="size-preview"><span id="size-dot"></span></span>
+      <input type="range" id="size-input" min="1" max="60" value="4" />
+    </label>
+
+    <span class="tb-sep"></span>
+
+    <select id="bg-select" class="tb-select" title="Background pattern">
+      <option value="blank">Blank</option>
+      <option value="grid">Grid</option>
+      <option value="dots">Dots</option>
+    </select>
+    <label class="color-wrap" title="Background color">
+      <input type="color" id="bg-color" value="#ffffff" />
+      <span class="color-dot" id="bg-color-dot"></span>
+    </label>
+
+    <button class="tb-btn" id="btn-undo" title="Undo" disabled>↶</button>
+    <button class="tb-btn" id="btn-redo" title="Redo" disabled>↷</button>
+
+    <span class="tb-sep"></span>
+
+    <button class="tb-btn toggle" id="btn-pressure" title="Pressure sensitivity (off)">〰️</button>
+    <button class="tb-btn" id="btn-settings" title="Settings">⚙️</button>
+    <div class="menu-wrap">
+      <button class="tb-btn primary" id="btn-export" title="Export">Export ▾</button>
+      <div class="menu hidden" id="export-menu">
+        <button class="menu-item" data-fmt="pdf">PDF</button>
+        <button class="menu-item" data-fmt="png">PNG</button>
+        <button class="menu-item" data-fmt="jpg">JPG</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Canvas -->
+  <main id="stage">
+    <canvas id="canvas"></canvas>
+    <div id="zoom-control" class="zoom-control">
+      <span class="zoom-icon" aria-hidden="true">🔍</span>
+      <button id="zoom-out" title="Zoom out">−</button>
+      <span id="zoom-level">100%</span>
+      <button id="zoom-in" title="Zoom in">＋</button>
+    </div>
+  </main>
+
+  <!-- Library overlay -->
+  <div id="library" class="overlay hidden">
+    <div class="overlay-panel">
+      <div class="overlay-head">
+        <h2>Documents</h2>
+        <button class="tb-btn" id="btn-new-doc" title="New document">＋ New</button>
+        <button class="tb-btn" id="btn-close-library" title="Close">✕</button>
+      </div>
+      <ul id="doc-list" class="doc-list"></ul>
+    </div>
+  </div>
+
+  <!-- Settings overlay -->
+  <div id="settings" class="overlay hidden">
+    <div class="overlay-panel small">
+      <div class="overlay-head">
+        <h2>Settings</h2>
+        <button class="tb-btn" id="btn-close-settings" title="Close">✕</button>
+      </div>
+      <div class="setting-row">
+        <label for="finger-mode">One finger does</label>
+        <select id="finger-mode" class="tb-select">
+          <option value="erase">Erase</option>
+          <option value="draw">Draw</option>
+          <option value="pan">Pan only</option>
+        </select>
+      </div>
+      <p class="hint">Two fingers always pan &amp; zoom. A pen always uses the selected tool.</p>
+      <div class="setting-row">
+        <label for="pattern-strength">Grid / dot strength</label>
+        <input type="range" id="pattern-strength" min="5" max="70" value="25" />
+      </div>
+      <div class="setting-row">
+        <label for="include-bg">Include background in PDF</label>
+        <input type="checkbox" id="include-bg" checked />
+      </div>
+    </div>
+  </div>
+
+  <script src="js/vendor/jspdf.umd.min.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
