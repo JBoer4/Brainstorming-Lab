@@ -3,7 +3,7 @@
 //    updates apply on a normal reload with no hard-refresh needed.
 //  - Offline -> serve the last cached copy, so the installed app still runs with
 //    no network.
-const CACHE_NAME = 'sketchpad-v5';
+const CACHE_NAME = 'sketchpad-v6';
 
 const ASSETS = [
   './',

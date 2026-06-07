@@ -69,6 +69,7 @@
         <button class="menu-item" data-fmt="pdf">PDF</button>
         <button class="menu-item" data-fmt="png">PNG</button>
         <button class="menu-item" data-fmt="jpg">JPG</button>
+        <button class="menu-item" data-fmt="sketch">Save .sketch (editable)</button>
       </div>
     </div>
   </header>
@@ -89,9 +90,11 @@
     <div class="overlay-panel">
       <div class="overlay-head">
         <h2>Documents</h2>
+        <button class="tb-btn" id="btn-import-doc" title="Import a .sketch file">⤓ Import</button>
         <button class="tb-btn" id="btn-new-doc" title="New document">＋ New</button>
         <button class="tb-btn" id="btn-close-library" title="Close">✕</button>
       </div>
+      <input type="file" id="import-file" accept=".sketch,.json,application/json" hidden />
       <ul id="doc-list" class="doc-list"></ul>
     </div>
   </div>

@@ -240,9 +240,59 @@ exportMenu.querySelectorAll('.menu-item').forEach((btn) => {
     const name = currentDoc?.name || 'sketch';
     const includeBg = $('include-bg').checked;
     if (btn.dataset.fmt === 'pdf') exportPDF(engine, name, includeBg);
+    else if (btn.dataset.fmt === 'sketch') exportDocFile(currentDoc);
     else exportImage(name, btn.dataset.fmt, includeBg);
   });
 });
+
+// ---------- .sketch files (editable, transfer between devices) ----------
+function exportDocFile(doc) {
+  if (!doc) return;
+  const data = {
+    app: 'sketchpad',
+    version: 1,
+    name: doc.name,
+    background: doc.background || 'blank',
+    bgColor: doc.bgColor || '#ffffff',
+    strokes: doc.strokes || [],
+  };
+  const safe = (doc.name || 'sketch').replace(/[^\w\-. ]+/g, '_').trim() || 'sketch';
+  downloadFile(safe + '.sketch', JSON.stringify(data));
+}
+
+async function importSketchFile(file) {
+  try {
+    const data = JSON.parse(await file.text());
+    if (!data || !Array.isArray(data.strokes)) throw new Error('not a Sketchpad file');
+    await saveNow(); // preserve the current board before switching
+    const doc = {
+      id: store.newId(),
+      name: data.name || file.name.replace(/\.(sketch|json)$/i, '') || 'Imported',
+      background: data.background || 'blank',
+      bgColor: data.bgColor || '#ffffff',
+      strokes: data.strokes,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    await store.saveDoc(doc);
+    openDoc(doc);
+    $('library').classList.add('hidden');
+  } catch (err) {
+    alert('Could not import that file: ' + err.message);
+  }
+}
+
+function downloadFile(filename, text, mime = 'application/json') {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
 function exportImage(name, fmt, includeBg) {
   // JPEG has no transparency, so always bake a background for it.
@@ -279,6 +329,12 @@ $('btn-new-doc').addEventListener('click', async () => {
   openDoc(doc);
   $('library').classList.add('hidden');
 });
+$('btn-import-doc').addEventListener('click', () => $('import-file').click());
+$('import-file').addEventListener('change', (e) => {
+  const f = e.target.files[0];
+  if (f) importSketchFile(f);
+  e.target.value = ''; // allow re-importing the same file later
+});
 
 async function renderLibrary() {
   const list = $('doc-list');
@@ -309,6 +365,8 @@ async function renderLibrary() {
       $('library').classList.add('hidden');
     });
 
+    const exportBtn = iconButton('⤴', 'Export .sketch file', () => exportDocFile(doc));
+
     const renameBtn = iconButton('✎', 'Rename', async () => {
       const name = prompt('Rename document', doc.name);
       if (name && name.trim()) {
@@ -331,6 +389,7 @@ async function renderLibrary() {
     delBtn.classList.add('del');
 
     li.appendChild(info);
+    li.appendChild(exportBtn);
     li.appendChild(renameBtn);
     li.appendChild(delBtn);
     list.appendChild(li);
