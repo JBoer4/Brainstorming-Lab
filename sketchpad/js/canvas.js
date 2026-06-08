@@ -317,6 +317,9 @@ export class CanvasEngine {
     if (isTouch) {
       if (this.fingerMode === 'pan') {
         this._startGesture();
+      } else if (this.fingerMode === 'tool') {
+        // one finger follows whichever tool is selected (pen, eraser, shapes…)
+        this._startStroke(e, this.tool, 'touch');
       } else {
         this._startStroke(e, this.fingerMode === 'erase' ? 'erase' : 'pen', 'touch');
       }

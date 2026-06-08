@@ -30,7 +30,7 @@ async function boot() {
   if (typeof savedOpacity === 'number') engine.patternOpacity = savedOpacity;
   $('pattern-strength').value = Math.round(engine.patternOpacity * 100);
 
-  loadRecentColors();
+  renderHotbar();
   setColor(engine.color);
   selectTool('pen'); // also syncs the size slider to the pen's size
 
@@ -51,9 +51,7 @@ function openDoc(doc) {
   currentDoc = doc;
   $('doc-name').value = doc.name;
   $('bg-select').value = doc.background || 'blank';
-  const bgColor = doc.bgColor || '#ffffff';
-  $('bg-color').value = bgColor;
-  $('bg-color-dot').style.background = bgColor;
+  $('bg-color').value = doc.bgColor || '#ffffff';
   engine.load(doc);
   store.setMeta('lastOpenId', doc.id);
   updateUndoRedo();
@@ -123,45 +121,108 @@ document.querySelectorAll('.tool').forEach((btn) => {
   btn.addEventListener('click', () => selectTool(btn.dataset.tool));
 });
 
-// ---------- color ----------
+// ---------- color + hotbar ----------
+// The hotbar (Option A "quick row") = pinned presets (leading) + the last two
+// used colours (trailing, dot-marked) + an "add" button to pin a new preset.
+const DEFAULT_PINNED = ['#2a2118', '#df5a36', '#ef8b62', '#d39a2e', '#3f9d68'];
+const DEFAULT_RECENTS = ['#1696a3', '#f5efe3'];
+let pickerMode = 'set'; // 'set' = change active colour, 'pin' = add a preset chip
+
 function setColor(hex) {
   engine.color = hex;
   $('color-input').value = hex;
+  // The hotbar well and the rail swatch both read this CSS variable.
   document.documentElement.style.setProperty('--current-color', hex);
+  updateHotbarSelection();
 }
 
-$('color-input').addEventListener('input', (e) => {
-  setColor(e.target.value);
-});
-$('color-input').addEventListener('change', (e) => {
-  addRecentColor(e.target.value);
-});
-
-function loadRecentColors() {
+function getPinned() {
+  try {
+    const p = JSON.parse(localStorage.getItem('pinnedColors') || 'null');
+    if (Array.isArray(p) && p.length) return p;
+  } catch { /* fall through to defaults */ }
+  return DEFAULT_PINNED.slice();
+}
+function getRecents() {
   const stored = JSON.parse(localStorage.getItem('recentColors') || '[]');
-  const defaults = ['#111318', '#e0564f', '#2e7d32', '#1565c0', '#f9a825'];
-  const colors = (stored.length ? stored : defaults).slice(0, 6);
-  renderRecentColors(colors);
+  return (stored.length ? stored : DEFAULT_RECENTS).slice(0, 2);
+}
+
+function renderHotbar() {
+  const chips = $('hb-chips');
+  chips.innerHTML = '';
+  getPinned().forEach((c) => chips.appendChild(makeChip(c, false)));
+  getRecents().forEach((c) => chips.appendChild(makeChip(c, true)));
+  const add = document.createElement('button');
+  add.className = 'hb-add';
+  add.title = 'Pin a new colour';
+  add.innerHTML = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+  add.addEventListener('click', () => openPicker('pin'));
+  chips.appendChild(add);
+  updateHotbarSelection();
+}
+
+function makeChip(color, isRecent) {
+  const b = document.createElement('button');
+  b.className = 'hb-chip' + (isRecent ? ' recent' : '');
+  b.style.background = color;
+  b.dataset.color = color;
+  b.title = color;
+  b.addEventListener('click', () => setColor(color));
+  return b;
+}
+
+function updateHotbarSelection() {
+  const cur = (engine.color || '').toLowerCase();
+  document.querySelectorAll('#hb-chips .hb-chip').forEach((b) => {
+    b.classList.toggle('sel', (b.dataset.color || '').toLowerCase() === cur);
+  });
 }
 
 function addRecentColor(hex) {
   let colors = JSON.parse(localStorage.getItem('recentColors') || '[]');
   colors = [hex, ...colors.filter((c) => c.toLowerCase() !== hex.toLowerCase())].slice(0, 6);
   localStorage.setItem('recentColors', JSON.stringify(colors));
-  renderRecentColors(colors);
+  renderHotbar();
 }
 
-function renderRecentColors(colors) {
-  const wrap = $('recent-colors');
-  wrap.innerHTML = '';
-  colors.forEach((c) => {
-    const s = document.createElement('span');
-    s.className = 'swatch';
-    s.style.background = c;
-    s.title = c;
-    s.addEventListener('click', () => { setColor(c); selectTool('pen'); });
-    wrap.appendChild(s);
+function pinColor(hex) {
+  let pinned = getPinned();
+  if (!pinned.some((c) => c.toLowerCase() === hex.toLowerCase())) {
+    pinned = [...pinned, hex].slice(0, 10);
+    localStorage.setItem('pinnedColors', JSON.stringify(pinned));
+  }
+  renderHotbar();
+}
+
+function openPicker(mode) {
+  pickerMode = mode || 'set';
+  $('color-input').click();
+}
+
+$('color-input').addEventListener('input', (e) => setColor(e.target.value));
+$('color-input').addEventListener('change', (e) => {
+  addRecentColor(e.target.value);
+  if (pickerMode === 'pin') pinColor(e.target.value);
+  pickerMode = 'set';
+});
+
+// The current-colour well and the rail swatch both open the full picker.
+$('color-now').addEventListener('click', () => openPicker('set'));
+$('color-swatch').addEventListener('click', () => openPicker('set'));
+
+// Eyedropper — pick a colour off the screen where the browser supports it.
+const eyedropBtn = $('btn-eyedrop');
+if (window.EyeDropper) {
+  eyedropBtn.addEventListener('click', async () => {
+    try {
+      const res = await new EyeDropper().open();
+      setColor(res.sRGBHex);
+      addRecentColor(res.sRGBHex);
+    } catch { /* user cancelled */ }
   });
+} else {
+  eyedropBtn.style.display = 'none';
 }
 
 // ---------- size ----------
@@ -178,13 +239,20 @@ $('size-input').addEventListener('input', (e) => {
   updateSizeDot(v);
 });
 
+// The rail size bubble opens the slider in a small popover.
+const sizePop = $('size-pop');
+$('size-bubble').addEventListener('click', (e) => {
+  e.stopPropagation();
+  sizePop.classList.toggle('hidden');
+});
+sizePop.addEventListener('click', (e) => e.stopPropagation());
+
 // ---------- background ----------
 $('bg-select').addEventListener('change', (e) => {
   engine.setBackground(e.target.value);
 });
 $('bg-color').addEventListener('input', (e) => {
   engine.setBgColor(e.target.value);
-  $('bg-color-dot').style.background = e.target.value;
 });
 
 // ---------- undo / redo ----------
@@ -207,6 +275,7 @@ $('btn-pressure').addEventListener('click', () => {
   engine.pressure = !engine.pressure;
   const btn = $('btn-pressure');
   btn.classList.toggle('on', engine.pressure);
+  btn.textContent = engine.pressure ? 'On' : 'Off';
   btn.title = 'Pressure sensitivity (' + (engine.pressure ? 'on' : 'off') + ')';
 });
 
@@ -232,7 +301,10 @@ $('btn-export').addEventListener('click', (e) => {
   e.stopPropagation();
   exportMenu.classList.toggle('hidden');
 });
-document.addEventListener('click', () => exportMenu.classList.add('hidden'));
+document.addEventListener('click', () => {
+  exportMenu.classList.add('hidden');
+  sizePop.classList.add('hidden');
+});
 exportMenu.querySelectorAll('.menu-item').forEach((btn) => {
   btn.addEventListener('click', async () => {
     exportMenu.classList.add('hidden');

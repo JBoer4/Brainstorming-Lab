@@ -3,68 +3,94 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-  <meta name="theme-color" content="#1e1e24" />
+  <meta name="theme-color" content="#efe8da" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#29221a" media="(prefers-color-scheme: dark)" />
   <title>Sketchpad</title>
   <link rel="manifest" href="manifest.json" />
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="icon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=Spline+Sans+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <!-- Top toolbar -->
-  <header id="toolbar">
-    <button class="tb-btn" id="btn-library" title="Documents">☰</button>
-    <input id="doc-name" class="doc-name" type="text" value="Untitled" spellcheck="false" />
-
-    <span class="tb-sep"></span>
-
+  <!-- Left rail: tools + colour/size cluster -->
+  <aside id="rail" class="rail">
     <div class="tool-group" role="group" aria-label="Tools">
-      <button class="tb-btn tool" data-tool="pen" title="Pen">✏️</button>
-      <button class="tb-btn tool" data-tool="erase" title="True eraser (erases pixels)">⬜</button>
-      <button class="tb-btn tool" data-tool="stroke-erase" title="Stroke eraser (deletes whole strokes)">✂️</button>
-      <button class="tb-btn tool" data-tool="hand" title="Hand (drag to pan)">✋</button>
+      <button class="tb box big tool" data-tool="pen" title="Pen">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21.17 6.81a1 1 0 0 0-3.99-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5z"/><path d="m15 5 4 4"/></svg>
+      </button>
+      <button class="tb box big tool" data-tool="erase" title="True eraser (erases pixels)">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><g transform="rotate(-18 12 10)"><rect x="4.5" y="5" width="14" height="8.5" rx="2"/><line x1="10" y1="5" x2="10" y2="13.5"/></g><line x1="3.5" y1="20.5" x2="20.5" y2="20.5" stroke-dasharray="0.4 3"/></svg>
+      </button>
+      <button class="tb box big tool" data-tool="stroke-erase" title="Stroke eraser (deletes whole strokes)">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><g transform="rotate(-18 12 10)"><rect x="4.5" y="5" width="14" height="8.5" rx="2"/><line x1="10" y1="5" x2="10" y2="13.5"/></g><line x1="3.5" y1="20.5" x2="20.5" y2="20.5"/></svg>
+      </button>
+      <button class="tb box big tool" data-tool="hand" title="Hand (drag to pan)">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9l-3 3 3 3"/><path d="M9 5l3-3 3 3"/><path d="M15 19l-3 3-3-3"/><path d="M19 9l3 3-3 3"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/></svg>
+      </button>
     </div>
+
+    <div class="rdiv"></div>
 
     <div class="tool-group" role="group" aria-label="Shapes">
-      <button class="tb-btn tool" data-tool="line" title="Line">／</button>
-      <button class="tb-btn tool" data-tool="rect" title="Rectangle">▭</button>
-      <button class="tb-btn tool" data-tool="ellipse" title="Ellipse / circle">◯</button>
+      <button class="tb box big tool" data-tool="line" title="Line">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="19" x2="19" y2="5"/></svg>
+      </button>
+      <button class="tb box big tool" data-tool="rect" title="Rectangle">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2.5"/></svg>
+      </button>
+      <button class="tb box big tool" data-tool="ellipse" title="Ellipse / circle">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/></svg>
+      </button>
     </div>
 
-    <span class="tb-sep"></span>
+    <div class="rspace"></div>
 
-    <label class="color-wrap" title="Color">
-      <input type="color" id="color-input" value="#111318" />
-      <span class="color-dot" id="color-dot"></span>
-    </label>
-    <div id="recent-colors" class="recent-colors"></div>
+    <button class="size-bubble" id="size-bubble" title="Brush size"><span id="size-dot"></span></button>
+    <button class="tb box big" id="btn-eyedrop" title="Pick colour (eyedropper)">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M19 3.4a2.1 2.1 0 0 0-3 0l-1.5 1.5 3 3L19 6.4a2.1 2.1 0 0 0 0-3Z"/><path d="m13.6 6.4-8 8a2 2 0 0 0-.5.85L4 19.5l4.25-1.1a2 2 0 0 0 .85-.5l8-8"/></svg>
+    </button>
+    <button class="swatch" id="color-swatch" title="Current colour — tap to change"></button>
 
-    <label class="size-wrap" title="Brush size">
-      <span class="size-preview"><span id="size-dot"></span></span>
-      <input type="range" id="size-input" min="1" max="60" value="4" />
-    </label>
+    <div class="rdiv"></div>
 
-    <span class="tb-sep"></span>
+    <button class="tb box big" id="btn-settings" title="Settings">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1.5" y1="14" x2="6.5" y2="14"/><line x1="9.5" y1="8" x2="14.5" y2="8"/><line x1="17.5" y1="16" x2="22.5" y2="16"/></svg>
+    </button>
+  </aside>
 
-    <select id="bg-select" class="tb-select" title="Background pattern">
-      <option value="blank">Blank</option>
-      <option value="grid">Grid</option>
-      <option value="dots">Dots</option>
-    </select>
-    <label class="color-wrap" title="Background color">
-      <input type="color" id="bg-color" value="#ffffff" />
-      <span class="color-dot" id="bg-color-dot"></span>
-    </label>
+  <!-- Top strip: doc name, colour hotbar, actions -->
+  <header id="topstrip" class="topstrip">
+    <button class="tb box" id="btn-library" title="Documents">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+    </button>
 
-    <button class="tb-btn" id="btn-undo" title="Undo" disabled>↶</button>
-    <button class="tb-btn" id="btn-redo" title="Redo" disabled>↷</button>
+    <input id="doc-name" class="docname" type="text" value="Untitled" spellcheck="false" />
 
-    <span class="tb-sep"></span>
+    <div class="hb-sep"></div>
 
-    <button class="tb-btn toggle" id="btn-pressure" title="Pressure sensitivity (off)">〰️</button>
-    <button class="tb-btn" id="btn-settings" title="Settings">⚙️</button>
+    <!-- Colour hotbar (Option A — quick row). Chips + "add" rendered by app.js. -->
+    <div class="hb-row" id="hotbar">
+      <button class="hb-now ring" id="color-now" title="Current colour — tap to change"></button>
+      <div class="hb-chips" id="hb-chips"></div>
+    </div>
+
+    <div class="sp"></div>
+
+    <button class="tb box" id="btn-undo" title="Undo" disabled>
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>
+    </button>
+    <button class="tb box" id="btn-redo" title="Redo" disabled>
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13"/></svg>
+    </button>
+
     <div class="menu-wrap">
-      <button class="tb-btn primary" id="btn-export" title="Export">Export ▾</button>
+      <button class="btn-export sm" id="btn-export" title="Export">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <span>Export</span>
+      </button>
       <div class="menu hidden" id="export-menu">
         <button class="menu-item" data-fmt="pdf">PDF</button>
         <button class="menu-item" data-fmt="png">PNG</button>
@@ -78,13 +104,25 @@
   <!-- Canvas -->
   <main id="stage">
     <canvas id="canvas"></canvas>
-    <div id="zoom-control" class="zoom-control">
-      <span class="zoom-icon" aria-hidden="true">🔍</span>
-      <button id="zoom-out" title="Zoom out">−</button>
+
+    <!-- Brush-size slider, opened by the rail size bubble -->
+    <div id="size-pop" class="size-pop hidden">
+      <input type="range" id="size-input" min="1" max="60" value="4" />
+    </div>
+
+    <div id="zoom-control" class="zoom">
+      <button class="zb" id="zoom-out" title="Zoom out">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      </button>
       <span id="zoom-level">100%</span>
-      <button id="zoom-in" title="Zoom in">＋</button>
+      <button class="zb" id="zoom-in" title="Zoom in">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      </button>
     </div>
   </main>
+
+  <!-- Hidden native colour picker, triggered from the hotbar / swatch -->
+  <input type="color" id="color-input" value="#111318" class="picker-input" aria-hidden="true" tabindex="-1" />
 
   <!-- Library overlay -->
   <div id="library" class="overlay hidden">
@@ -108,18 +146,35 @@
         <button class="tb-btn" id="btn-close-settings" title="Close">✕</button>
       </div>
       <div class="setting-row">
-        <label for="finger-mode">One finger does</label>
-        <select id="finger-mode" class="tb-select">
-          <option value="erase">Erase</option>
-          <option value="draw">Draw</option>
-          <option value="pan">Pan only</option>
+        <label for="bg-select">Background pattern</label>
+        <select id="bg-select" class="tb-select" title="Background pattern">
+          <option value="blank">Blank</option>
+          <option value="grid">Grid</option>
+          <option value="dots">Dots</option>
         </select>
       </div>
-      <p class="hint">Two fingers always pan &amp; zoom. A pen always uses the selected tool.</p>
+      <div class="setting-row">
+        <label for="bg-color">Background colour</label>
+        <input type="color" id="bg-color" class="setting-color" value="#ffffff" />
+      </div>
       <div class="setting-row">
         <label for="pattern-strength">Grid / dot strength</label>
         <input type="range" id="pattern-strength" min="5" max="70" value="25" />
       </div>
+      <div class="setting-row">
+        <label id="pressure-label" for="btn-pressure">Pressure sensitivity</label>
+        <button class="tb-btn toggle" id="btn-pressure" title="Pressure sensitivity (off)">Off</button>
+      </div>
+      <div class="setting-row">
+        <label for="finger-mode">One finger does</label>
+        <select id="finger-mode" class="tb-select">
+          <option value="tool">Active tool</option>
+          <option value="erase">Erase</option>
+          <option value="draw">Draw (pen)</option>
+          <option value="pan">Pan only</option>
+        </select>
+      </div>
+      <p class="hint">Two fingers always pan &amp; zoom. A pen always uses the selected tool.</p>
       <div class="setting-row">
         <label for="include-bg">Include background in PDF</label>
         <input type="checkbox" id="include-bg" checked />
