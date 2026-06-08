@@ -3,7 +3,7 @@
 //    updates apply on a normal reload with no hard-refresh needed.
 //  - Offline -> serve the last cached copy, so the installed app still runs with
 //    no network.
-const CACHE_NAME = 'sketchpad-v11';
+const CACHE_NAME = 'sketchpad-v18';
 
 const ASSETS = [
   './',
@@ -41,9 +41,15 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
+// Local development: never serve from cache. Let every request go straight to
+// the network so edits show up on a plain reload — no clearing the SW. The
+// offline cache still applies on the deployed (non-localhost) origin.
+const IS_LOCAL_DEV = self.location.hostname === 'localhost' || self.location.hostname === '127.0.0.1';
+
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
+  if (IS_LOCAL_DEV) return;
 
   event.respondWith(
     fetch(req)

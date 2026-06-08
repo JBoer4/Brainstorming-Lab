@@ -18,6 +18,7 @@ let saveTimer = 0;
 
 // ---------- boot ----------
 async function boot() {
+  applyTheme(localStorage.getItem('theme') || 'light');
   engine.resize();
 
   // restore settings
@@ -51,7 +52,10 @@ function openDoc(doc) {
   currentDoc = doc;
   $('doc-name').value = doc.name;
   $('bg-select').value = doc.background || 'blank';
-  $('bg-color').value = doc.bgColor || '#ffffff';
+  // A theme-default background follows the current theme (dark in night mode).
+  let bgColor = doc.bgColor || '#ffffff';
+  if (isAutoBg(bgColor)) { bgColor = THEME_BG[currentTheme()]; doc.bgColor = bgColor; }
+  $('bg-color').value = bgColor;
   engine.load(doc);
   store.setMeta('lastOpenId', doc.id);
   updateUndoRedo();
@@ -62,7 +66,7 @@ async function createDoc(name) {
     id: store.newId(),
     name: name || 'Untitled',
     background: 'blank',
-    bgColor: '#ffffff',
+    bgColor: THEME_BG[currentTheme()],
     strokes: [],
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -124,8 +128,8 @@ document.querySelectorAll('.tool').forEach((btn) => {
 // ---------- color + hotbar ----------
 // The hotbar (Option A "quick row") = pinned presets (leading) + the last two
 // used colours (trailing, dot-marked) + an "add" button to pin a new preset.
-const DEFAULT_PINNED = ['#2a2118', '#df5a36', '#ef8b62', '#d39a2e', '#3f9d68'];
-const DEFAULT_RECENTS = ['#1696a3', '#f5efe3'];
+const DEFAULT_PINNED = ['#000000', '#ffffff', '#e23b2e', '#f5a623', '#2ecc40', '#1e74d8'];
+const DEFAULT_RECENTS = ['#ffd400', '#8e44ad'];
 let pickerMode = 'set'; // 'set' = change active colour, 'pin' = add a preset chip
 
 function setColor(hex) {
@@ -254,6 +258,13 @@ $('bg-select').addEventListener('change', (e) => {
 $('bg-color').addEventListener('input', (e) => {
   engine.setBgColor(e.target.value);
 });
+// Drop a custom backdrop and return to the theme-following default.
+$('btn-bg-auto').addEventListener('click', () => {
+  const bg = THEME_BG[currentTheme()];
+  engine.setBgColor(bg);
+  if (currentDoc) currentDoc.bgColor = bg;
+  $('bg-color').value = bg;
+});
 
 // ---------- undo / redo ----------
 function updateUndoRedo() {
@@ -293,6 +304,45 @@ $('pattern-strength').addEventListener('input', (e) => {
   const v = Number(e.target.value) / 100;
   engine.setPatternOpacity(v);
   store.setMeta('patternOpacity', v);
+});
+
+// ---------- theme (manual light / dark, persisted; not system-driven) ----------
+const SUN_ICON = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><line x1="12" y1="2" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="22"/><line x1="4.2" y1="4.2" x2="5.6" y2="5.6"/><line x1="18.4" y1="18.4" x2="19.8" y2="19.8"/><line x1="2" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22" y2="12"/><line x1="4.2" y1="19.8" x2="5.6" y2="18.4"/><line x1="18.4" y1="5.6" x2="19.8" y2="4.2"/></svg>';
+const MOON_ICON = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3 6.5 6.5 0 0 0 21 12.8Z"/></svg>';
+const THEME_CHROME = { light: '#efe8da', dark: '#29221a' };
+// Default canvas background per theme. A doc whose bg is one of these "auto"
+// values follows the theme; once the user picks any other colour it sticks.
+const THEME_BG = { light: '#ffffff', dark: '#221c16' };
+const AUTO_BGS = ['#ffffff', '#221c16'];
+
+function currentTheme() {
+  return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+}
+function isAutoBg(c) { return AUTO_BGS.includes((c || '').toLowerCase()); }
+
+function applyTheme(theme) {
+  const t = theme === 'dark' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', t);
+  localStorage.setItem('theme', t);
+  // Show the current mode's icon; tap swaps to the other.
+  $('btn-theme').innerHTML = t === 'dark' ? MOON_ICON : SUN_ICON;
+  const meta = $('meta-theme');
+  if (meta) meta.content = THEME_CHROME[t];
+}
+
+// Keep a theme-default canvas background in step with the active theme; leave
+// custom backgrounds (anything the user explicitly picked) untouched.
+function syncCanvasBgToTheme() {
+  if (!currentDoc || !isAutoBg(engine.bgColor)) return;
+  const bg = THEME_BG[currentTheme()];
+  engine.setBgColor(bg);          // repaints + schedules a save via onChange
+  currentDoc.bgColor = bg;
+  $('bg-color').value = bg;
+}
+
+$('btn-theme').addEventListener('click', () => {
+  applyTheme(currentTheme() === 'dark' ? 'light' : 'dark');
+  syncCanvasBgToTheme();
 });
 
 // ---------- export ----------

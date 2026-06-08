@@ -3,8 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-  <meta name="theme-color" content="#efe8da" media="(prefers-color-scheme: light)" />
-  <meta name="theme-color" content="#29221a" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#efe8da" id="meta-theme" />
   <title>Sketchpad</title>
   <link rel="manifest" href="manifest.json" />
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
@@ -78,6 +77,8 @@
     </div>
 
     <div class="sp"></div>
+
+    <button class="tb box" id="btn-theme" title="Toggle light / dark"></button>
 
     <button class="tb box" id="btn-undo" title="Undo" disabled>
       <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>
@@ -155,7 +156,10 @@
       </div>
       <div class="setting-row">
         <label for="bg-color">Background colour</label>
-        <input type="color" id="bg-color" class="setting-color" value="#ffffff" />
+        <div class="setting-bg-controls">
+          <input type="color" id="bg-color" class="setting-color" value="#ffffff" />
+          <button class="tb-btn" id="btn-bg-auto" title="Clear the custom background and follow the light / dark theme">Reset</button>
+        </div>
       </div>
       <div class="setting-row">
         <label for="pattern-strength">Grid / dot strength</label>
@@ -169,7 +173,8 @@
         <label for="finger-mode">One finger does</label>
         <select id="finger-mode" class="tb-select">
           <option value="tool">Active tool</option>
-          <option value="erase">Erase</option>
+          <option value="erase">True erase (pixels)</option>
+          <option value="stroke-erase">Stroke erase (whole strokes)</option>
           <option value="draw">Draw (pen)</option>
           <option value="pan">Pan only</option>
         </select>

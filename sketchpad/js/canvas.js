@@ -272,6 +272,14 @@ export class CanvasEngine {
     return n;
   }
 
+  // Which tool a one-finger / right-button action maps to (for the non-'tool',
+  // non-'pan' finger modes: true erase, stroke erase, or draw).
+  _fingerActionTool() {
+    if (this.fingerMode === 'erase') return 'erase';
+    if (this.fingerMode === 'stroke-erase') return 'stroke-erase';
+    return 'pen'; // 'draw' (or any fallback)
+  }
+
   _onDown(e) {
     e.preventDefault();
     this.canvas.setPointerCapture?.(e.pointerId);
@@ -307,7 +315,7 @@ export class CanvasEngine {
         this._startMousePan(e);
       } else if (e.button === 2) {     // right button == one finger
         if (this.fingerMode === 'pan') this._startMousePan(e);
-        else this._startStroke(e, this.fingerMode === 'erase' ? 'erase' : 'pen', 'mouse');
+        else this._startStroke(e, this._fingerActionTool(), 'mouse');
       } else {                          // left button == selected tool
         this._startStroke(e, this.tool, 'mouse');
       }
@@ -321,7 +329,7 @@ export class CanvasEngine {
         // one finger follows whichever tool is selected (pen, eraser, shapes…)
         this._startStroke(e, this.tool, 'touch');
       } else {
-        this._startStroke(e, this.fingerMode === 'erase' ? 'erase' : 'pen', 'touch');
+        this._startStroke(e, this._fingerActionTool(), 'touch');
       }
     }
   }
@@ -373,7 +381,10 @@ export class CanvasEngine {
   _startStroke(e, tool, type) {
     const pt = this._point(e);
     if (tool === 'stroke-erase') {
-      this.active = { pointerId: e.pointerId, type, tool: 'stroke-erase', removed: [] };
+      // Snapshot the stroke list so undo can restore it: a single stroke-erase
+      // may split lines into new sub-strokes, not just delete whole ones.
+      this.active = { pointerId: e.pointerId, type, tool: 'stroke-erase',
+        before: this.strokes.slice(), changed: false };
       this._strokeEraseAt(pt);
       return;
     }
@@ -438,8 +449,9 @@ export class CanvasEngine {
     this.active = null;
     if (!a) return;
     if (a.tool === 'stroke-erase') {
-      if (a.removed.length) {
-        this.undoStack.push({ type: 'delete', items: a.removed });
+      if (a.changed) {
+        this._pruneOrphanErasers();   // drop eraser holes no longer over any ink
+        this.undoStack.push({ type: 'replace', before: a.before, after: this.strokes.slice() });
         this.redoStack = [];
         this.onChange();
       }
@@ -473,13 +485,122 @@ export class CanvasEngine {
     const r = Math.max(ERASE_HIT, this.eraserSize / 2);
     let changed = false;
     for (let i = this.strokes.length - 1; i >= 0; i--) {
-      if (this._strokeHit(this.strokes[i], pt, r)) {
-        this.active.removed.push({ index: i, stroke: this.strokes[i] });
+      const s = this.strokes[i];
+      if (s.tool === 'erase') continue;        // never delete true-eraser holes
+      if (!this._strokeHit(s, pt, r)) continue;
+      if (s.shape) {                           // shapes delete whole
         this.strokes.splice(i, 1);
         changed = true;
+        continue;
+      }
+      // Freehand line: drop only the connected visible run that was touched,
+      // treating true-eraser holes as real breaks in the line.
+      const survivors = this._eraseConnectedRun(s, i, pt, r);
+      if (survivors === null) continue;        // touch landed on an erased gap
+      this.strokes.splice(i, 1, ...survivors);
+      changed = true;
+    }
+    if (changed) { if (this.active) this.active.changed = true; this.requestDraw(); }
+  }
+
+  // True if a document point is hidden by a true-eraser stroke painted AFTER
+  // this one. Only later erase strokes can punch holes in a stroke; an erase
+  // made earlier sits underneath it and doesn't affect it — so a new stroke
+  // drawn over an old erased area stays whole instead of being split.
+  _coveredByErase(p, afterIndex) {
+    for (let k = afterIndex + 1; k < this.strokes.length; k++) {
+      const e = this.strokes[k];
+      if (e.tool !== 'erase') continue;
+      const half = (e.size || 0) / 2;
+      const ep = e.points;
+      if (ep.length === 1) {
+        if (Math.hypot(ep[0].x - p.x, ep[0].y - p.y) <= half) return true;
+      } else {
+        for (let i = 1; i < ep.length; i++) {
+          if (distToSeg(p, ep[i - 1], ep[i]) <= half) return true;
+        }
       }
     }
-    if (changed) this.requestDraw();
+    return false;
+  }
+
+  // Split a freehand stroke at its eraser holes into visible runs, drop the run
+  // the eraser touched, and return the surviving runs as new strokes — or null
+  // if the touch landed only on an already-erased gap (nothing to remove).
+  _eraseConnectedRun(stroke, strokeIndex, pt, r) {
+    const pts = stroke.points;
+    const runs = [];
+    let cur = null;
+    for (let j = 0; j < pts.length; j++) {
+      if (this._coveredByErase(pts[j], strokeIndex)) {
+        if (cur) { runs.push(cur); cur = null; }
+      } else if (cur) cur.push(pts[j]);
+      else cur = [pts[j]];
+    }
+    if (cur) runs.push(cur);
+    if (runs.length === 0) return null;        // wholly erased already
+
+    const pad = r + stroke.size / 2;
+    let hit = -1;
+    for (let k = 0; k < runs.length && hit < 0; k++) {
+      const run = runs[k];
+      if (run.length === 1) {
+        if (Math.hypot(run[0].x - pt.x, run[0].y - pt.y) <= pad) hit = k;
+      } else {
+        for (let m = 1; m < run.length; m++) {
+          if (distToSeg(pt, run[m - 1], run[m]) <= pad) { hit = k; break; }
+        }
+      }
+    }
+    if (hit < 0) return null;                  // touched a gap, not a visible run
+
+    const survivors = [];
+    for (let k = 0; k < runs.length; k++) {
+      if (k === hit) continue;
+      survivors.push({ ...stroke, points: runs[k].map((p) => ({ ...p })) });
+    }
+    return survivors;
+  }
+
+  // Padded bounding box of a stroke in document units (covers freehand polylines
+  // and the two corner points of shapes).
+  _strokeBBox(s) {
+    const half = (s.size || 0) / 2 + 1;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of s.points) {
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y > maxY) maxY = p.y;
+    }
+    return { minX: minX - half, minY: minY - half, maxX: maxX + half, maxY: maxY + half };
+  }
+
+  // Remove eraser strokes that no longer overlap any drawn stroke beneath them
+  // (painted earlier). Such erasers reveal nothing, so dropping them is a no-op
+  // visually — it just stops invisible holes from piling up in the document.
+  // Uses bounding boxes: a non-overlapping box means no overlap for certain, so
+  // we never drop an eraser that still affects ink (ambiguous ones are kept).
+  _pruneOrphanErasers() {
+    const drawn = [];
+    for (let k = 0; k < this.strokes.length; k++) {
+      const s = this.strokes[k];
+      if (s.tool !== 'erase' && s.points.length) drawn.push({ k, box: this._strokeBBox(s) });
+    }
+    const keep = [];
+    let removed = false;
+    for (let k = 0; k < this.strokes.length; k++) {
+      const s = this.strokes[k];
+      if (s.tool !== 'erase') { keep.push(s); continue; }
+      const ebox = this._strokeBBox(s);
+      let useful = false;
+      for (const d of drawn) {
+        if (d.k < k && bboxOverlap(ebox, d.box)) { useful = true; break; }
+      }
+      if (useful) keep.push(s);
+      else removed = true;
+    }
+    if (removed) this.strokes = keep;
   }
 
   _strokeHit(stroke, pt, r) {
@@ -528,6 +649,8 @@ export class CanvasEngine {
     } else if (op.type === 'delete') {
       const items = op.items.slice().sort((a, b) => a.index - b.index);
       for (const it of items) this.strokes.splice(it.index, 0, it.stroke);
+    } else if (op.type === 'replace') {
+      this.strokes = op.before.slice();
     }
     this.redoStack.push(op);
     this.requestDraw();
@@ -545,6 +668,8 @@ export class CanvasEngine {
         const idx = this.strokes.indexOf(it.stroke);
         if (idx !== -1) this.strokes.splice(idx, 1);
       }
+    } else if (op.type === 'replace') {
+      this.strokes = op.after.slice();
     }
     this.undoStack.push(op);
     this.requestDraw();
@@ -693,6 +818,9 @@ export class CanvasEngine {
 function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
 function midpoint(a, b) { return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function bboxOverlap(a, b) {
+  return a.minX <= b.maxX && a.maxX >= b.minX && a.minY <= b.maxY && a.maxY >= b.minY;
+}
 
 function distToSeg(p, a, b) {
   const dx = b.x - a.x;

@@ -19,8 +19,7 @@
   --font-mono: "Spline Sans Mono", ui-monospace, "SF Mono", Menlo, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
+:root[data-theme="dark"] {
     --paper: #221c16;
     --grid: #2f271e;
     --chrome: #29221a;
@@ -33,7 +32,6 @@
     --shadow: rgba(0, 0, 0, 0.5);
     --glass: rgba(41, 34, 26, 0.82);
     --danger: #e0796a;
-  }
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -396,6 +394,7 @@ html, body {
   font-size: 14px;
   font-family: var(--font-ui);
 }
+.setting-bg-controls { display: inline-flex; align-items: center; gap: 8px; }
 .setting-color {
   width: 48px; height: 34px;
   border: 1px solid var(--border);
